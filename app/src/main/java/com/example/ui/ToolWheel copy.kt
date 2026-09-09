@@ -72,7 +72,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
@@ -84,7 +83,6 @@ import androidx.compose.ui.window.Dialog
 import com.example.model.BrushType
 import com.example.model.ToolSlot
 import java.util.Locale
-import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -98,6 +96,24 @@ enum class ToolWheelControlPopup {
     SMOOTHING
 }
 
+/**
+ * Concepts 1:1 Architectural 3-Ring Concentric Floating Instrument Wheel:
+ *
+ * 1. OUTER RING (Diameter 290dp):
+ *    - All drawing/editing tool slots sit strictly in the outer ring band (radius ~120dp).
+ *    - Guaranteed NO overlap or trapping into the middle ring.
+ *    - Leftmost Slot Overrides: Undo (Back Arrow) and Redo (Forward Arrow) are placed specifically
+ *      in the two leftmost slots of the outer circle.
+ *
+ * 2. MIDDLE RING (Diameter 196dp):
+ *    - Tactile visual icons (Concentric circle for Size, Half-filled circle for Opacity, Curved streamline for Smoothing).
+ *    - Centered precisely in the middle ring segment (radius ~74dp).
+ *    - Tapping an icon opens ONLY its respective modular slider popup anchored immediately to the RIGHT of the wheel.
+ *
+ * 3. INNER CIRCLE (Diameter 96dp):
+ *    - Active color disc and spectrum border for the selected tool slot.
+ *    - Tapping opens the multi-tiered infinite-rotating COPIC radial color wheel.
+ */
 @Composable
 fun ToolWheel(
     toolSlots: List<ToolSlot>,
@@ -126,24 +142,16 @@ fun ToolWheel(
     var activePopup by remember { mutableStateOf<ToolWheelControlPopup?>(null) }
     var showBrushDialog by remember { mutableStateOf(false) }
 
-    // Expandable 4th Outer Color Wheel state
-    var isColorWheelExpanded by remember { mutableStateOf(false) }
-    var colorWheelRotationAngle by remember { mutableFloatStateOf(0f) }
-
-    val copicColors = remember {
-        listOf(
-            Color(0xFFFF0000), Color(0xFFFF7F00), Color(0xFFFFFF00),
-            Color(0xFF00FF00), Color(0xFF00FFFF), Color(0xFF0000FF),
-            Color(0xFF8B00FF), Color(0xFFFF0080), Color(0xFF8B4513),
-            Color(0xFFFFFFFF), Color(0xFF808080), Color(0xFF000000)
-        )
-    }
-
     val spectrumColors = remember {
         listOf(
-            Color(0xFFFF0000), Color(0xFFFF7F00), Color(0xFFFFFF00),
-            Color(0xFF00FF00), Color(0xFF00FFFF), Color(0xFF0000FF),
-            Color(0xFF8B00FF), Color(0xFFFF0000)
+            Color(0xFFFF0000),
+            Color(0xFFFF7F00),
+            Color(0xFFFFFF00),
+            Color(0xFF00FF00),
+            Color(0xFF00FFFF),
+            Color(0xFF0000FF),
+            Color(0xFF8B00FF),
+            Color(0xFFFF0000)
         )
     }
 
@@ -159,14 +167,12 @@ fun ToolWheel(
             modifier = Modifier
         ) {
             // =========================================================================
-            // CONCENTRIC TOOL WHEEL (Diameter expanded if 4th Ring is open)
+            // 3-RING CONCENTRIC TOOL WHEEL (Diameter 290dp)
             // =========================================================================
-            val wheelSize = if (isColorWheelExpanded) 370.dp else 290.dp
-
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(wheelSize)
+                    .size(290.dp)
                     .pointerInput(Unit) {
                         detectDragGestures { change, dragAmount ->
                             change.consume()
@@ -175,41 +181,6 @@ fun ToolWheel(
                         }
                     }
             ) {
-                // ---------------------------------------------------------------------
-                // EXPANDABLE 4TH OUTER RING: RADIAL COLOR TRACK
-                // ---------------------------------------------------------------------
-                if (isColorWheelExpanded) {
-                    Canvas(
-                        modifier = Modifier
-                            .size(370.dp)
-                            .pointerInput(isColorWheelExpanded) {
-                                detectDragGestures { change, dragAmount ->
-                                    change.consume()
-                                    colorWheelRotationAngle += (dragAmount.x + dragAmount.y) * 0.4f
-                                }
-                            }
-                    ) {
-                        val center = Offset(size.width / 2f, size.height / 2f)
-                        val outerColorRadius = 175.dp.toPx()
-                        val innerColorRadius = 145.dp.toPx()
-                        val strokeWidth = outerColorRadius - innerColorRadius
-                        val sweepAngle = 360f / copicColors.size
-
-                        copicColors.forEachIndexed { index, color ->
-                            val startAngle = (index * sweepAngle) + colorWheelRotationAngle
-                            drawArc(
-                                color = color,
-                                startAngle = startAngle,
-                                sweepAngle = sweepAngle - 1.5f,
-                                useCenter = false,
-                                topLeft = Offset(center.x - outerColorRadius, center.y - outerColorRadius),
-                                size = Size(outerColorRadius * 2f, outerColorRadius * 2f),
-                                style = Stroke(width = strokeWidth)
-                            )
-                        }
-                    }
-                }
-
                 // ---------------------------------------------------------------------
                 // 1. OUTER RING BACKDROP (Diameter 290dp)
                 // ---------------------------------------------------------------------
@@ -221,8 +192,15 @@ fun ToolWheel(
                     modifier = Modifier.size(290.dp)
                 ) {}
 
-                // Leftmost Slot 1: UNDO
+                // ---------------------------------------------------------------------
+                // 1. OUTER RING: Radial Slots (Radius = 120dp)
+                // Guaranteed fully inside outer band (radius 98dp to 145dp).
+                // Leftmost two slots: UNDO (upper-left, ~215°) & REDO (lower-left, ~145°).
+                // Remaining 6 slots: Active tool instruments.
+                // ---------------------------------------------------------------------
                 val outerRadius = 120f
+
+                // Leftmost Slot 1: UNDO (Upper-left, 215°)
                 val undoAngleRad = Math.toRadians(215.0)
                 val undoX = (outerRadius * cos(undoAngleRad)).toFloat()
                 val undoY = (outerRadius * sin(undoAngleRad)).toFloat()
@@ -249,7 +227,7 @@ fun ToolWheel(
                     }
                 }
 
-                // Leftmost Slot 2: REDO
+                // Leftmost Slot 2: REDO (Lower-left, 145°)
                 val redoAngleRad = Math.toRadians(145.0)
                 val redoX = (outerRadius * cos(redoAngleRad)).toFloat()
                 val redoY = (outerRadius * sin(redoAngleRad)).toFloat()
@@ -276,8 +254,16 @@ fun ToolWheel(
                     }
                 }
 
-                // Outer Tool Slots
-                val toolSlotAngles = listOf(-90.0, -45.0, 0.0, 45.0, 90.0, -135.0)
+                // Remaining 6 outer slots for Drawing/Editing Tools
+                // Distributed around the remaining perimeter: -90° (Top), -45°, 0° (Right), 45°, 90° (Bottom), 270°/etc.
+                val toolSlotAngles = listOf(
+                    -90.0, // Top
+                    -45.0, // Top-Right
+                    0.0,   // Right
+                    45.0,  // Bottom-Right
+                    90.0,  // Bottom
+                    -135.0 // Top-Far-Left
+                )
 
                 for (idx in toolSlotAngles.indices) {
                     val slotIndex = idx.coerceAtMost(toolSlots.size - 1)
@@ -293,7 +279,9 @@ fun ToolWheel(
                             .offset { IntOffset(slotX.roundToInt(), slotY.roundToInt()) }
                             .size(38.dp)
                             .clip(CircleShape)
-                            .background(if (isSelected) Color(0xFF2B3349) else Color(0xFF1E212E))
+                            .background(
+                                if (isSelected) Color(0xFF2B3349) else Color(0xFF1E212E)
+                            )
                             .border(
                                 width = if (isSelected) 2.dp else 1.dp,
                                 color = if (isSelected) Color(0xFF48CAE4) else Color(0xFF3B4055),
@@ -302,8 +290,11 @@ fun ToolWheel(
                             .pointerInput(slotIndex, isSelected) {
                                 detectTapGestures(
                                     onTap = {
-                                        if (isSelected) showBrushDialog = true
-                                        else onSelectSlot(slotIndex)
+                                        if (isSelected) {
+                                            showBrushDialog = true
+                                        } else {
+                                            onSelectSlot(slotIndex)
+                                        }
                                     },
                                     onDoubleTap = {
                                         onSelectSlot(slotIndex)
@@ -327,6 +318,7 @@ fun ToolWheel(
                                 tint = if (slot.brushType.isUtility) Color(0xFFCBD5E1) else Color(slot.color),
                                 modifier = Modifier.size(18.dp)
                             )
+                            // Real-time active color dot indicator below icon
                             if (!slot.brushType.isUtility) {
                                 Box(
                                     modifier = Modifier
@@ -350,6 +342,13 @@ fun ToolWheel(
                     modifier = Modifier.size(196.dp)
                 ) {}
 
+                // ---------------------------------------------------------------------
+                // 2. MIDDLE RING: Minimal Visual Icons (Radius = 74dp)
+                // Text removed; replaced with pure minimalist tactile visual icons:
+                // - Size Icon: Concentric stroke/circle indicator (-45°, Top-Right)
+                // - Opacity Icon: Half-filled opacity circle (0°, Right)
+                // - Smoothing Icon: Curved streamline line icon (45°, Bottom-Right)
+                // ---------------------------------------------------------------------
                 val middleRadius = 74f
 
                 // Size Icon Button (-45°)
@@ -445,18 +444,17 @@ fun ToolWheel(
                 }
 
                 // ---------------------------------------------------------------------
-                // 3. INNER CIRCLE (Diameter 96dp): Toggle 4th Ring Outer Color Track
+                // 3. INNER CIRCLE (Diameter 96dp): Active Color Disc & Spectrum Ring
+                // Tapping opens the multi-tiered infinite-rotating COPIC radial color wheel
                 // ---------------------------------------------------------------------
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .size(96.dp)
-                        .clickable {
-                            isColorWheelExpanded = !isColorWheelExpanded
-                            onOpenColorWheel()
-                        }
+                        .clickable { onOpenColorWheel() }
                         .testTag("tool_wheel_center_color")
                 ) {
+                    // Multi-hue continuous spectrum ring perimeter
                     Canvas(modifier = Modifier.size(96.dp)) {
                         drawCircle(
                             brush = Brush.sweepGradient(spectrumColors),
@@ -464,6 +462,7 @@ fun ToolWheel(
                         )
                     }
 
+                    // Active solid color disc
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
@@ -475,7 +474,7 @@ fun ToolWheel(
                         val isLightColor = Color(activeColor).run { (red * 0.299 + green * 0.587 + blue * 0.114) > 0.6 }
                         Icon(
                             imageVector = Icons.Default.Palette,
-                            contentDescription = "Toggle Concentric Color Track",
+                            contentDescription = "Open Radial COPIC Color Wheel",
                             tint = if (isLightColor) Color.Black.copy(alpha = 0.85f) else Color.White,
                             modifier = Modifier.size(20.dp)
                         )
@@ -485,6 +484,7 @@ fun ToolWheel(
 
             // =========================================================================
             // MODULAR POPUP CONTROLS ANCHORED TO THE RIGHT OF WHEEL
+            // Opens ONLY ONE slider popup at a time (Size, Opacity, or Smoothing)
             // =========================================================================
             AnimatedVisibility(
                 visible = activePopup != null,
@@ -555,7 +555,7 @@ fun ToolWheel(
         }
 
         // =========================================================================
-        // BRUSH SELECTION DIALOG
+        // BRUSH SELECTION DIALOG WITH VISUAL PRESSURE TAPER PREVIEWS
         // =========================================================================
         if (showBrushDialog) {
             BrushSelectionDialog(
@@ -573,7 +573,7 @@ fun ToolWheel(
 }
 
 /**
- * Minimalist Visual Icon: Size
+ * Minimalist Visual Icon: Concentric stroke/circle indicator for Size.
  */
 @Composable
 fun SizeVisualIcon(
@@ -586,6 +586,7 @@ fun SizeVisualIcon(
         val center = Offset(size.width / 2f, size.height / 2f)
         val maxRadius = size.width / 2f - 2.dp.toPx()
 
+        // Outer concentric ring
         drawCircle(
             color = strokeColor,
             radius = maxRadius,
@@ -593,6 +594,7 @@ fun SizeVisualIcon(
             style = Stroke(width = 1.6.dp.toPx())
         )
 
+        // Dynamic inner filled indicator based on current size
         val innerRadius = (maxRadius * (sizePt / 48f).coerceIn(0.25f, 0.85f))
         drawCircle(
             color = strokeColor,
@@ -603,7 +605,7 @@ fun SizeVisualIcon(
 }
 
 /**
- * Minimalist Visual Icon: Opacity
+ * Minimalist Visual Icon: Half-filled opacity circle indicator.
  */
 @Composable
 fun OpacityVisualIcon(
@@ -617,6 +619,7 @@ fun OpacityVisualIcon(
         val center = Offset(size.width / 2f, size.height / 2f)
         val radius = size.width / 2f - 2.dp.toPx()
 
+        // Outer circle outline
         drawCircle(
             color = ringColor,
             radius = radius,
@@ -624,6 +627,7 @@ fun OpacityVisualIcon(
             style = Stroke(width = 1.6.dp.toPx())
         )
 
+        // Right half filled arc
         drawArc(
             color = fillColor.copy(alpha = opacity.coerceIn(0.2f, 1.0f)),
             startAngle = -90f,
@@ -636,7 +640,7 @@ fun OpacityVisualIcon(
 }
 
 /**
- * Minimalist Visual Icon: Smoothing
+ * Minimalist Visual Icon: Curved streamline line icon for Smoothing.
  */
 @Composable
 fun SmoothingVisualIcon(
@@ -667,6 +671,7 @@ fun SmoothingVisualIcon(
             )
         )
 
+        // Small end tangent guide point
         drawCircle(
             color = lineColor,
             radius = 1.8.dp.toPx(),
@@ -676,7 +681,7 @@ fun SmoothingVisualIcon(
 }
 
 /**
- * Modular slider popup card
+ * Modular slider popup card showing only the single active parameter.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -693,6 +698,7 @@ fun ModularSliderCard(
     onClose: () -> Unit
 ) {
     Column {
+        // Header
         Row(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
@@ -719,46 +725,54 @@ fun ModularSliderCard(
 
         Spacer(modifier = Modifier.height(6.dp))
 
+        // Numerical readout
         Text(
             text = valueDisplay,
             color = Color.White,
             fontSize = 18.sp,
-            fontWeight = FontWeight.ExtraBold
+            fontWeight = FontWeight.Bold
         )
 
         Spacer(modifier = Modifier.height(4.dp))
 
+        // Continuous Slider
         Slider(
             value = value,
             onValueChange = onValueChange,
             valueRange = valueRange,
             colors = SliderDefaults.colors(
-                thumbColor = activeColor,
-                activeTrackColor = activeColor,
-                inactiveTrackColor = Color(0xFF2E354A)
-            )
+                thumbColor = Color.White,
+                activeTrackColor = activeColor
+            ),
+            modifier = Modifier.height(26.dp)
         )
 
         Spacer(modifier = Modifier.height(8.dp))
 
+        // Quick Preset Chips
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
             presets.forEach { preset ->
-                val isSelected = (value - preset).let { kotlin.math.abs(it) < 0.02f }
+                val isSelected = (Math.abs(preset - value) < 0.05f)
                 Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = if (isSelected) activeColor else Color(0xFF262A3C),
-                    modifier = Modifier.clickable { onSelectPreset(preset) }
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isSelected) activeColor.copy(alpha = 0.25f) else Color(0xFF232736),
+                    border = androidx.compose.foundation.BorderStroke(
+                        width = 1.dp,
+                        color = if (isSelected) activeColor else Color(0xFF373E52)
+                    ),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onSelectPreset(preset) }
                 ) {
                     Text(
                         text = presetFormatter(preset),
-                        color = if (isSelected) Color.Black else Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        color = if (isSelected) Color.White else Color(0xFFCBD5E1),
+                        fontSize = 9.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
                     )
                 }
             }
@@ -767,7 +781,8 @@ fun ModularSliderCard(
 }
 
 /**
- * Brush Selection Modal Dialog
+ * Brush selection modal showcasing all genuine Concepts brushes with visual pressure-to-size
+ * taper preview images so users instantly see how each brush responds to S Pen dynamics.
  */
 @Composable
 fun BrushSelectionDialog(
@@ -777,90 +792,274 @@ fun BrushSelectionDialog(
     onSelectBrush: (BrushType) -> Unit,
     onDismiss: () -> Unit
 ) {
+    var selectedBrush by remember { mutableStateOf(currentBrush) }
+
+    val conceptsBrushes = listOf(
+        BrushType.PEN,
+        BrushType.SOFT_PENCIL,
+        BrushType.HARD_PENCIL,
+        BrushType.FOUNTAIN_PEN,
+        BrushType.MARKER,
+        BrushType.WATERCOLOR,
+        BrushType.AIRBRUSH,
+        BrushType.WIRE,
+        BrushType.LASSO,
+        BrushType.ERASER_HARD,
+        BrushType.ERASER_SOFT,
+        BrushType.SLICE,
+        BrushType.NUDGE
+    )
+
     Dialog(onDismissRequest = onDismiss) {
         Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = Color(0xFF181A26),
-            border = androidx.compose.foundation.BorderStroke(1.2.dp, Color(0xFF333A50)),
+            shape = RoundedCornerShape(24.dp),
+            color = Color(0xFF161822),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF353B4E)),
+            shadowElevation = 24.dp,
             modifier = Modifier
-                .width(320.dp)
-                .padding(16.dp)
+                .fillMaxWidth()
+                .padding(10.dp)
+                .testTag("brush_selection_dialog")
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "Select Instrument",
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                // Header
+                Row(
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column {
+                        Text(
+                            text = "Concepts Brushes & Tools",
+                            color = Color(0xFFF1F5F9),
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "S Pen hardware pressure-taper dynamics",
+                            color = Color(0xFF48CAE4),
+                            fontSize = 11.sp
+                        )
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = Color(0xFF94A3B8))
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.height(240.dp)
+                // Hero Pressure Taper Preview Card
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0xFF0F1118),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF282C3D)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(72.dp)
                 ) {
-                    items(BrushType.entries.toTypedArray()) { brush ->
-                        val isSelected = (brush == currentBrush)
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (isSelected) Color(0xFF273347) else Color(0xFF202332),
-                            border = androidx.compose.foundation.BorderStroke(
-                                width = if (isSelected) 1.5.dp else 1.dp,
-                                color = if (isSelected) Color(0xFF48CAE4) else Color(0xFF2E3448)
-                            ),
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(8.dp)) {
+                        BrushPressureStrokePreview(
+                            brushType = selectedBrush,
+                            color = if (selectedBrush.isUtility) Color(0xFF48CAE4) else Color(currentColor),
+                            maxSize = currentSize,
                             modifier = Modifier
-                                .clickable { onSelectBrush(brush) }
-                                .padding(2.dp)
+                                .fillMaxWidth()
+                                .height(52.dp)
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .align(Alignment.BottomCenter)
+                                .padding(horizontal = 8.dp, vertical = 2.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(10.dp)
-                            ) {
-                                Icon(
-                                    imageVector = getBrushIcon(brush),
-                                    contentDescription = brush.displayName,
-                                    tint = if (isSelected) Color(0xFF48CAE4) else Color(0xFF94A3B8),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = brush.displayName,
-                                    color = Color.White,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
+                            Text("Light Pressure (Thin)", color = Color(0xFF64748B), fontSize = 8.5.sp)
+                            Text("Max Pressure (Full Size)", color = Color(0xFF64748B), fontSize = 8.5.sp)
                         }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                // Brushes Grid with Mini Pressure Taper Previews
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.height(260.dp)
+                ) {
+                    items(conceptsBrushes) { brush ->
+                        val isSelected = (brush == selectedBrush)
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isSelected) Color(0xFF272F43) else Color(0xFF1C1F2B),
+                            border = androidx.compose.foundation.BorderStroke(
+                                width = if (isSelected) 2.dp else 1.dp,
+                                color = if (isSelected) Color(0xFF48CAE4) else Color(0xFF33384B)
+                            ),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { selectedBrush = brush }
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center,
+                                modifier = Modifier.padding(8.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = getBrushIcon(brush),
+                                        contentDescription = brush.displayName,
+                                        tint = if (isSelected) Color(0xFF48CAE4) else Color(0xFFCBD5E1),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = brush.displayName,
+                                        color = if (isSelected) Color.White else Color(0xFF94A3B8),
+                                        fontSize = 10.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        maxLines = 1
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                // Mini pressure stroke preview in every brush card
+                                BrushPressureStrokePreview(
+                                    brushType = brush,
+                                    color = if (brush.isUtility) Color(0xFF48CAE4) else Color(currentColor),
+                                    maxSize = 14f,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
                 Button(
-                    onClick = onDismiss,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF282E42)),
+                    onClick = { onSelectBrush(selectedBrush) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0077B6)),
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Close", color = Color.White)
+                    Text("Select ${selectedBrush.displayName}", color = Color.White, fontWeight = FontWeight.Bold)
                 }
             }
         }
     }
 }
 
-private fun getBrushIcon(brushType: BrushType): ImageVector {
-    return when (brushType) {
-        BrushType.PEN -> Icons.Default.Create
-        BrushType.PENCIL -> Icons.Default.Edit
-        BrushType.MARKER -> Icons.Default.ModeEdit
-        BrushType.HIGHLIGHTER -> Icons.Default.Highlight
+/**
+ * Canvas that accurately renders an S Pen pressure-to-size tapering stroke from light (left)
+ * to heavy pressure (right), communicating dynamic brush characteristics.
+ */
+@Composable
+fun BrushPressureStrokePreview(
+    brushType: BrushType,
+    color: Color,
+    maxSize: Float,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        if (w <= 0f || h <= 0f) return@Canvas
+
+        val startX = w * 0.08f
+        val endX = w * 0.92f
+        val cy = h / 2f
+        val totalLength = endX - startX
+
+        // Wire maintains uniform fixed stroke width and butt caps
+        if (brushType == BrushType.WIRE) {
+            drawLine(
+                color = color,
+                start = Offset(startX, cy),
+                end = Offset(endX, cy),
+                strokeWidth = (maxSize * 0.6f).coerceIn(2f, 10f),
+                cap = StrokeCap.Butt
+            )
+            return@Canvas
+        }
+
+        val minRatio = when (brushType) {
+            BrushType.FOUNTAIN_PEN -> 0.15f
+            BrushType.WATERCOLOR -> 0.25f
+            BrushType.AIRBRUSH -> 0.30f
+            BrushType.SOFT_PENCIL -> 0.40f
+            BrushType.MARKER -> 0.50f
+            BrushType.HARD_PENCIL -> 0.65f
+            BrushType.PEN -> 0.72f
+            BrushType.ERASER_SOFT -> 0.45f
+            BrushType.ERASER_HARD -> 0.85f
+            else -> 0.60f
+        }
+
+        val minAlpha = when (brushType) {
+            BrushType.AIRBRUSH -> 0.25f
+            BrushType.WATERCOLOR -> 0.35f
+            BrushType.SOFT_PENCIL -> 0.45f
+            BrushType.FOUNTAIN_PEN -> 0.55f
+            BrushType.MARKER -> 0.55f
+            else -> 0.85f
+        }
+
+        val cap = if (brushType == BrushType.MARKER) StrokeCap.Square else StrokeCap.Round
+        val effectiveMaxW = (maxSize * 1.4f).coerceIn(3f, 26f)
+
+        // Draw segmented tapering curve from left (light pressure) to right (full pressure)
+        val steps = 28
+        var prevX = startX
+        var prevY = cy
+
+        for (i in 1..steps) {
+            val progress = i / steps.toFloat()
+            val x = startX + totalLength * progress
+            // Subtle wave curve for visual organic feel
+            val y = cy + (sin(progress * Math.PI.toFloat()) * 3.5f)
+
+            // Pressure scales smoothly from 0.05f to 1.0f
+            val pressure = (0.05f + 0.95f * progress)
+            val segW = effectiveMaxW * (minRatio + (1.0f - minRatio) * pressure)
+            val segAlpha = (minAlpha + (1.0f - minAlpha) * pressure) * color.alpha
+
+            drawLine(
+                color = color.copy(alpha = segAlpha.coerceIn(0.1f, 1.0f)),
+                start = Offset(prevX, prevY),
+                end = Offset(x, y),
+                strokeWidth = segW,
+                cap = cap
+            )
+
+            prevX = x
+            prevY = y
+        }
+    }
+}
+
+fun getBrushIcon(type: BrushType): ImageVector {
+    return when (type) {
+        BrushType.PEN -> Icons.Default.Edit
+        BrushType.SOFT_PENCIL -> Icons.Default.Create
+        BrushType.HARD_PENCIL -> Icons.Default.ModeEdit
+        BrushType.FOUNTAIN_PEN -> Icons.Default.Brush
+        BrushType.WIRE -> Icons.Default.RadioButtonUnchecked
+        BrushType.MARKER -> Icons.Default.Highlight
         BrushType.WATERCOLOR -> Icons.Default.WaterDrop
         BrushType.AIRBRUSH -> Icons.Default.Air
-        BrushType.ERASER -> Icons.Default.RadioButtonUnchecked
-        BrushType.LASSO -> Icons.Default.CropFree
         BrushType.SLICE -> Icons.Default.ContentCut
+        BrushType.NUDGE -> Icons.Default.AutoFixHigh
+        BrushType.ERASER_HARD -> Icons.Default.CropFree
+        BrushType.ERASER_SOFT -> Icons.Default.InvertColors
+        BrushType.ERASER_MASK -> Icons.Default.CropFree
+        BrushType.LASSO -> Icons.Default.CropFree
     }
 }

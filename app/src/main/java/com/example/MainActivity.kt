@@ -164,7 +164,6 @@ fun ConceptsSketchApp(
     val isCurrentLasso by viewModel.isCurrentStrokeLasso.collectAsState()
     val quickMenuPoint by viewModel.quickMenuPoint.collectAsState()
     val fingerMode by viewModel.fingerMode.collectAsState()
-    val pressureCurve by viewModel.pressureCurve.collectAsState()
 
     // Dialog & UI overlay visibility
     var isLayersOpen by remember { mutableStateOf(false) }
@@ -218,10 +217,8 @@ fun ConceptsSketchApp(
                 isCurrentLasso = isCurrentLasso,
                 activeColor = activeColor,
                 activeWidth = activeSize,
-                activeOpacity = activeOpacity,
                 activeBrush = activeBrush,
                 fingerMode = fingerMode,
-                pressureCurve = pressureCurve,
                 onPenStart = { pt, isBtn, w, h -> viewModel.startInking(pt, isBtn, w, h) },
                 onPenMove = { pts, isBtn, w, h -> viewModel.appendInkingPoints(pts, isBtn, w, h) },
                 onPenEnd = { pt, isBtn, w, h -> viewModel.finishInking(pt, isBtn, w, h) },
@@ -281,14 +278,29 @@ fun ConceptsSketchApp(
                     exportedJsonContent = json
                 },
                 onOpenBlueprintSpecs = { isBlueprintOpen = true },
-                pressureCurve = pressureCurve,
-                onPressureCurveChange = { viewModel.setPressureCurve(it) },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()
             )
 
-            
+            // 3. Floating Concepts Tool Wheel (Draggable 3-Ring Wheel)
+            ToolWheel(
+                toolSlots = toolSlots,
+                activeSlotIndex = activeSlotIndex,
+                activeColor = activeColor,
+                activeBrush = activeBrush,
+                activeSize = activeSize,
+                activeOpacity = activeOpacity,
+                activeSmoothing = activeSmoothing,
+                onSelectSlot = { viewModel.selectToolSlot(it) },
+                onChangeBrushType = { viewModel.setActiveBrush(it) },
+                onOpenColorWheel = { isColorWheelOpen = true },
+                onSelectColor = { viewModel.setActiveColor(it) },
+                onSizeChange = { viewModel.setActiveStrokeWidth(it) },
+                onOpacityChange = { viewModel.setActiveOpacity(it) },
+                onSmoothingChange = { viewModel.setActiveSmoothing(it) },
+                modifier = Modifier.align(Alignment.TopStart)
+            )
 
             // 4. Floating HUD Selection Toolbar (Copy, Delete, Mirror Left, Mirror Top)
             FloatingSelectionBar(

@@ -19,8 +19,6 @@ class UserSettingsManager(context: Context) {
     private val prefs: SharedPreferences =
         context.getSharedPreferences("concepts_user_settings", Context.MODE_PRIVATE)
 
-    val wheelPreferencesManager = UserWheelPreferencesManager(context)
-
     companion object {
         private const val KEY_ACTIVE_SLOT = "active_slot_index"
         private const val KEY_ACTIVE_COLOR = "active_color"

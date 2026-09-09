@@ -3,8 +3,6 @@ package com.example.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -14,8 +12,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,15 +26,17 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Redo
-import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Air
+import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Highlight
+import androidx.compose.material.icons.filled.InvertColors
 import androidx.compose.material.icons.filled.ModeEdit
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
@@ -60,8 +58,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -78,17 +74,18 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.example.model.BrushType
 import com.example.model.ToolSlot
-import java.util.Locale
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-enum class ToolWheelControlPopup {
-    SIZE,
-    OPACITY,
-    SMOOTHING
-}
-
+/**
+ * Concepts 1:1 Signature 3-Ring Circular Tool Wheel:
+ * 1. Inner Ring: Active tool preview, color chip, size (pt/px), opacity (%), smoothing (%). Tapping toggles sliders.
+ * 2. Middle Ring: Tool slots radially arranged as wedges/segments with crisp icons and real-time color dots.
+ * 3. Outer Ring: Quick COPIC color ring arranged in a circular arc.
+ *
+ * Fluid drag-to-reposition with snap-to-dock zones near corners.
+ */
 @Composable
 fun ToolWheel(
     toolSlots: List<ToolSlot>,
@@ -105,21 +102,31 @@ fun ToolWheel(
     onSizeChange: (Float) -> Unit,
     onOpacityChange: (Float) -> Unit,
     onSmoothingChange: (Float) -> Unit,
-    onUndo: () -> Unit = {},
-    onRedo: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    // Draggable position state
     var offsetX by remember { mutableFloatStateOf(16f) }
     var offsetY by remember { mutableFloatStateOf(120f) }
-
-    var activePopup by remember { mutableStateOf<ToolWheelControlPopup?>(null) }
+    var showSliders by remember { mutableStateOf(false) }
     var showBrushDialog by remember { mutableStateOf(false) }
 
-    val spectrumColors = remember {
+    // Outer ring quick COPIC palette colors (12 curated vibrant & architectural tones)
+    val quickCopicColors = remember {
         listOf(
-            Color(0xFFFF0000), Color(0xFFFF7F00), Color(0xFFFFFF00),
-            Color(0xFF00FF00), Color(0xFF00FFFF), Color(0xFF0000FF),
-            Color(0xFF8B00FF), Color(0xFFFF0000)
+            android.graphics.Color.parseColor("#000000"), // 100 Black
+            android.graphics.Color.parseColor("#686E74"), // C-7 Cool Gray
+            android.graphics.Color.parseColor("#CBD0D4"), // C-3 Light Cool Gray
+            android.graphics.Color.parseColor("#FFFFFF"), // 0 White
+            android.graphics.Color.parseColor("#E62B34"), // R29 Lipstick Red
+            android.graphics.Color.parseColor("#FA8223"), // YR04 Chrome Orange
+            android.graphics.Color.parseColor("#FBD429"), // Y15 Cadmium Yellow
+            android.graphics.Color.parseColor("#74B238"), // YG17 Grass Green
+            android.graphics.Color.parseColor("#008C4A"), // G17 Forest Green
+            android.graphics.Color.parseColor("#3FB1E5"), // B05 Robin's Egg Blue
+            android.graphics.Color.parseColor("#005DA4"), // B29 Night Blue
+            android.graphics.Color.parseColor("#6A2A80"), // V09 Violet
+            android.graphics.Color.parseColor("#6C4334"), // E29 Burnt Umber
+            android.graphics.Color.parseColor("#DFB186")  // E33 Sand
         )
     }
 
@@ -128,11 +135,12 @@ fun ToolWheel(
             .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
             .testTag("concepts_tool_wheel")
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            // Main 3-Ring Wheel Container (Diameter: 270dp)
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(290.dp)
+                    .size(270.dp)
                     .pointerInput(Unit) {
                         detectDragGestures { change, dragAmount ->
                             change.consume()
@@ -141,93 +149,59 @@ fun ToolWheel(
                         }
                     }
             ) {
-                // 1. OUTER RING BACKDROP (Diameter 290dp)
+                // Outer Ring Surface & Backdrop
                 Surface(
                     shape = CircleShape,
-                    color = Color(0xFF13151F).copy(alpha = 0.95f),
-                    shadowElevation = 18.dp,
-                    border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF2C3144)),
-                    modifier = Modifier.size(290.dp)
+                    color = Color(0xFF161822).copy(alpha = 0.92f),
+                    shadowElevation = 16.dp,
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF33384A)),
+                    modifier = Modifier.size(270.dp)
                 ) {}
 
-                // 2. MIDDLE RING BACKDROP (Diameter 196dp)
+                // --- 1. OUTER RING: Quick COPIC Color Arc (Radius ~ 118dp) ---
+                val outerRadius = 116f
+                for (i in quickCopicColors.indices) {
+                    val colorInt = quickCopicColors[i]
+                    // Distribute around top and sides (-160 to 160 deg)
+                    val angleDeg = -170.0 + (i * (340.0 / (quickCopicColors.size - 1)))
+                    val angleRad = Math.toRadians(angleDeg)
+                    val x = (outerRadius * cos(angleRad)).toFloat()
+                    val y = (outerRadius * sin(angleRad)).toFloat()
+
+                    Box(
+                        modifier = Modifier
+                            .offset { IntOffset(x.roundToInt(), y.roundToInt()) }
+                            .size(17.dp)
+                            .clip(CircleShape)
+                            .background(Color(colorInt))
+                            .border(
+                                width = if (activeColor == colorInt) 2.dp else 1.dp,
+                                color = if (activeColor == colorInt) Color.White else Color(0xFF4A4E62),
+                                shape = CircleShape
+                            )
+                            .clickable {
+                                onSelectColor(colorInt)
+                            }
+                    )
+                }
+
+                // Middle Ring Backdrop Track
                 Surface(
                     shape = CircleShape,
-                    color = Color(0xFF191C28).copy(alpha = 0.97f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF33394D)),
-                    modifier = Modifier.size(196.dp)
+                    color = Color(0xFF1E212D).copy(alpha = 0.96f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF383D52)),
+                    modifier = Modifier.size(200.dp)
                 ) {}
 
-                // =========================================================================
-                // POSITION CALCULATIONS: OUTER RING (Radius = 122dp)
-                // Positioned midway between outer ring edge (145dp) and middle ring edge (98dp)
-                // =========================================================================
-                val outerRadius = 122f
-
-                // UNDO (Upper-left)
-                val undoAngleRad = Math.toRadians(210.0)
-                val undoX = (outerRadius * cos(undoAngleRad)).toFloat()
-                val undoY = (outerRadius * sin(undoAngleRad)).toFloat()
-
-                Surface(
-                    shape = CircleShape,
-                    color = Color(0xFF202330),
-                    border = androidx.compose.foundation.BorderStroke(1.2.dp, Color(0xFF3F465C)),
-                    shadowElevation = 4.dp,
-                    modifier = Modifier
-                        .offset { IntOffset(undoX.roundToInt(), undoY.roundToInt()) }
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .clickable { onUndo() }
-                        .testTag("outer_slot_undo")
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Undo,
-                            contentDescription = "Undo Action",
-                            tint = Color(0xFFCBD5E1),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-
-                // REDO (Lower-left)
-                val redoAngleRad = Math.toRadians(150.0)
-                val redoX = (outerRadius * cos(redoAngleRad)).toFloat()
-                val redoY = (outerRadius * sin(redoAngleRad)).toFloat()
-
-                Surface(
-                    shape = CircleShape,
-                    color = Color(0xFF202330),
-                    border = androidx.compose.foundation.BorderStroke(1.2.dp, Color(0xFF3F465C)),
-                    shadowElevation = 4.dp,
-                    modifier = Modifier
-                        .offset { IntOffset(redoX.roundToInt(), redoY.roundToInt()) }
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .clickable { onRedo() }
-                        .testTag("outer_slot_redo")
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Redo,
-                            contentDescription = "Redo Action",
-                            tint = Color(0xFFCBD5E1),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-
-                // Tool Slots along Outer Ring
-                val toolSlotAngles = listOf(-90.0, -45.0, 0.0, 30.0, 60.0, 90.0)
-
-                for (idx in toolSlotAngles.indices) {
-                    val slotIndex = idx.coerceAtMost(toolSlots.size - 1)
-                    val slot = toolSlots[slotIndex]
-                    val isSelected = (slotIndex == activeSlotIndex)
-                    val angleRad = Math.toRadians(toolSlotAngles[idx])
-                    val slotX = (outerRadius * cos(angleRad)).toFloat()
-                    val slotY = (outerRadius * sin(angleRad)).toFloat()
+                // --- 2. MIDDLE RING: 8 Radial Tool Slots (Radius ~ 75dp) ---
+                val middleRadius = 75f
+                for (i in toolSlots.indices) {
+                    val slot = toolSlots[i]
+                    val isSelected = (i == activeSlotIndex)
+                    val angleDeg = -90.0 + (i * (360.0 / toolSlots.size))
+                    val angleRad = Math.toRadians(angleDeg)
+                    val slotX = (middleRadius * cos(angleRad)).toFloat()
+                    val slotY = (middleRadius * sin(angleRad)).toFloat()
 
                     Box(
                         contentAlignment = Alignment.Center,
@@ -235,211 +209,215 @@ fun ToolWheel(
                             .offset { IntOffset(slotX.roundToInt(), slotY.roundToInt()) }
                             .size(38.dp)
                             .clip(CircleShape)
-                            .background(if (isSelected) Color(0xFF2B3349) else Color(0xFF1E212E))
+                            .background(
+                                if (isSelected) Color(0xFF32374A) else Color(0xFF232736)
+                            )
                             .border(
                                 width = if (isSelected) 2.dp else 1.dp,
-                                color = if (isSelected) Color(0xFF48CAE4) else Color(0xFF3B4055),
+                                color = if (isSelected) Color(0xFF48CAE4) else Color(0xFF474C62),
                                 shape = CircleShape
                             )
-                            .pointerInput(slotIndex, isSelected) {
+                            .pointerInput(i, isSelected) {
                                 detectTapGestures(
                                     onTap = {
-                                        if (isSelected) showBrushDialog = true
-                                        else onSelectSlot(slotIndex)
+                                        if (isSelected) {
+                                            showBrushDialog = true
+                                        } else {
+                                            onSelectSlot(i)
+                                        }
+                                    },
+                                    onDoubleTap = {
+                                        onSelectSlot(i)
+                                        showBrushDialog = true
+                                    },
+                                    onLongPress = {
+                                        onSelectSlot(i)
+                                        showBrushDialog = true
                                     }
                                 )
                             }
+                            .testTag("tool_slot_$i")
                     ) {
-                        Icon(
-                            imageVector = getBrushIcon(slot.brushType),
-                            contentDescription = slot.brushType.displayName,
-                            tint = if (slot.brushType.isUtility) Color(0xFFCBD5E1) else Color(slot.color),
-                            modifier = Modifier.size(18.dp)
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = getBrushIcon(slot.brushType),
+                                contentDescription = slot.brushType.displayName,
+                                tint = if (slot.brushType.isUtility) Color(0xFFCBD5E1) else Color(slot.color),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            // Real-time active color dot indicator below icon
+                            if (!slot.brushType.isUtility) {
+                                Box(
+                                    modifier = Modifier
+                                        .padding(top = 1.dp)
+                                        .size(4.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(slot.color))
+                                )
+                            }
+                        }
                     }
                 }
 
-                // =========================================================================
-                // POSITION CALCULATIONS: MIDDLE RING (Radius = 68dp)
-                // Positioned midway between middle ring edge (98dp) and inner circle (48dp)
-                // =========================================================================
-                val middleRadius = 68f
-
-                // Size Button (-40°)
-                val sizeAngleRad = Math.toRadians(-40.0)
-                val sizeX = (middleRadius * cos(sizeAngleRad)).toFloat()
-                val sizeY = (middleRadius * sin(sizeAngleRad)).toFloat()
-                val isSizeActive = (activePopup == ToolWheelControlPopup.SIZE)
-
-                Surface(
-                    shape = CircleShape,
-                    color = if (isSizeActive) Color(0xFF273347) else Color(0xFF222635),
-                    border = androidx.compose.foundation.BorderStroke(
-                        width = if (isSizeActive) 1.5.dp else 1.dp,
-                        color = if (isSizeActive) Color(0xFF48CAE4) else Color(0xFF394056)
-                    ),
-                    modifier = Modifier
-                        .offset { IntOffset(sizeX.roundToInt(), sizeY.roundToInt()) }
-                        .size(34.dp)
-                        .clip(CircleShape)
-                        .clickable { activePopup = if (isSizeActive) null else ToolWheelControlPopup.SIZE }
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        SizeVisualIcon(isActive = isSizeActive, sizePt = activeSize, modifier = Modifier.size(20.dp))
-                    }
-                }
-
-                // Opacity Button (10°)
-                val opacityAngleRad = Math.toRadians(10.0)
-                val opacityX = (middleRadius * cos(opacityAngleRad)).toFloat()
-                val opacityY = (middleRadius * sin(opacityAngleRad)).toFloat()
-                val isOpacityActive = (activePopup == ToolWheelControlPopup.OPACITY)
-
-                Surface(
-                    shape = CircleShape,
-                    color = if (isOpacityActive) Color(0xFF273347) else Color(0xFF222635),
-                    border = androidx.compose.foundation.BorderStroke(
-                        width = if (isOpacityActive) 1.5.dp else 1.dp,
-                        color = if (isOpacityActive) Color(0xFF48CAE4) else Color(0xFF394056)
-                    ),
-                    modifier = Modifier
-                        .offset { IntOffset(opacityX.roundToInt(), opacityY.roundToInt()) }
-                        .size(34.dp)
-                        .clip(CircleShape)
-                        .clickable { activePopup = if (isOpacityActive) null else ToolWheelControlPopup.OPACITY }
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        OpacityVisualIcon(isActive = isOpacityActive, opacity = activeOpacity, modifier = Modifier.size(20.dp))
-                    }
-                }
-
-                // Smoothing Button (60°)
-                val smoothAngleRad = Math.toRadians(60.0)
-                val smoothX = (middleRadius * cos(smoothAngleRad)).toFloat()
-                val smoothY = (middleRadius * sin(smoothAngleRad)).toFloat()
-                val isSmoothActive = (activePopup == ToolWheelControlPopup.SMOOTHING)
-
-                Surface(
-                    shape = CircleShape,
-                    color = if (isSmoothActive) Color(0xFF273347) else Color(0xFF222635),
-                    border = androidx.compose.foundation.BorderStroke(
-                        width = if (isSmoothActive) 1.5.dp else 1.dp,
-                        color = if (isSmoothActive) Color(0xFF48CAE4) else Color(0xFF394056)
-                    ),
-                    modifier = Modifier
-                        .offset { IntOffset(smoothX.roundToInt(), smoothY.roundToInt()) }
-                        .size(34.dp)
-                        .clip(CircleShape)
-                        .clickable { activePopup = if (isSmoothActive) null else ToolWheelControlPopup.SMOOTHING }
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        SmoothingVisualIcon(isActive = isSmoothActive, modifier = Modifier.size(20.dp))
-                    }
-                }
-
-                // =========================================================================
-                // 3. INNER CENTER DISC (Diameter 96dp): Triggers Color Wheel Popup
-                // =========================================================================
+                // --- 3. INNER RING: Center Active Tool Core & Slider Trigger (Diameter 76dp) ---
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .size(96.dp)
-                        .clickable { onOpenColorWheel() }
-                ) {
-                    Canvas(modifier = Modifier.size(96.dp)) {
-                        drawCircle(
-                            brush = Brush.sweepGradient(spectrumColors),
-                            style = Stroke(width = 3.5.dp.toPx())
+                        .size(76.dp)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    Color(activeColor).copy(alpha = 0.95f),
+                                    Color(activeColor).copy(alpha = 0.60f),
+                                    Color(0xFF141620)
+                                )
+                            )
                         )
-                    }
-
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .size(76.dp)
-                            .clip(CircleShape)
-                            .background(Color(activeColor))
-                            .border(1.5.dp, Color.White.copy(alpha = 0.85f), CircleShape)
+                        .border(2.5.dp, Color(0xFFF1F5F9), CircleShape)
+                        .clickable {
+                            showSliders = !showSliders
+                        }
+                        .testTag("tool_wheel_center_core")
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Palette,
-                            contentDescription = "Color Wheel",
+                            imageVector = getBrushIcon(activeBrush),
+                            contentDescription = "Active Tool",
                             tint = Color.White,
                             modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = String.format("%.1fpt", activeSize),
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "${(activeOpacity * 100).roundToInt()}%",
+                            color = Color(0xFFE2E8F0),
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Medium
                         )
                     }
                 }
             }
 
-            // POPUP SLIDER ANCHORED TO RIGHT
+            // Quick Precision Adjustment Sliders Popup
             AnimatedVisibility(
-                visible = activePopup != null,
-                enter = fadeIn() + slideInHorizontally { -20 },
-                exit = fadeOut() + slideOutHorizontally { -20 }
+                visible = showSliders,
+                enter = fadeIn(),
+                exit = fadeOut()
             ) {
                 Surface(
                     shape = RoundedCornerShape(18.dp),
-                    color = Color(0xFF1B1D29).copy(alpha = 0.98f),
-                    border = androidx.compose.foundation.BorderStroke(1.2.dp, Color(0xFF383F56)),
-                    shadowElevation = 16.dp,
+                    color = Color(0xFF1B1D28).copy(alpha = 0.96f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF383D54)),
+                    shadowElevation = 12.dp,
                     modifier = Modifier
-                        .padding(start = 12.dp)
-                        .width(210.dp)
+                        .width(230.dp)
+                        .padding(top = 8.dp)
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        when (activePopup) {
-                            ToolWheelControlPopup.SIZE -> {
-                                ModularSliderCard(
-                                    title = "Stroke Size",
-                                    valueDisplay = "${String.format(Locale.US, "%.1f", activeSize)} pt",
-                                    value = activeSize,
-                                    valueRange = 0.5f..48f,
-                                    onValueChange = onSizeChange,
-                                    activeColor = Color(0xFF48CAE4),
-                                    presets = listOf(1f, 3.5f, 8f, 16f, 32f),
-                                    presetFormatter = { "${it.roundToInt()}pt" },
-                                    onSelectPreset = onSizeChange,
-                                    onClose = { activePopup = null }
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "Tool Adjustments",
+                                color = Color(0xFF48CAE4),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            IconButton(
+                                onClick = onOpenColorWheel,
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ColorLens,
+                                    contentDescription = "Color Wheel",
+                                    tint = Color(0xFFCBD5E1),
+                                    modifier = Modifier.size(16.dp)
                                 )
                             }
-                            ToolWheelControlPopup.OPACITY -> {
-                                ModularSliderCard(
-                                    title = "Opacity",
-                                    valueDisplay = "${(activeOpacity * 100).roundToInt()}%",
-                                    value = activeOpacity,
-                                    valueRange = 0.05f..1.0f,
-                                    onValueChange = onOpacityChange,
-                                    activeColor = Color(0xFF0077B6),
-                                    presets = listOf(0.25f, 0.50f, 0.75f, 1.0f),
-                                    presetFormatter = { "${(it * 100).roundToInt()}%" },
-                                    onSelectPreset = onOpacityChange,
-                                    onClose = { activePopup = null }
-                                )
-                            }
-                            ToolWheelControlPopup.SMOOTHING -> {
-                                ModularSliderCard(
-                                    title = "Smoothing",
-                                    valueDisplay = "${(activeSmoothing * 100).roundToInt()}%",
-                                    value = activeSmoothing,
-                                    valueRange = 0.0f..1.0f,
-                                    onValueChange = onSmoothingChange,
-                                    activeColor = Color(0xFF90E0EF),
-                                    presets = listOf(0.0f, 0.20f, 0.50f, 1.0f),
-                                    presetFormatter = { if (it == 0f) "Off" else "${(it * 100).roundToInt()}%" },
-                                    onSelectPreset = onSmoothingChange,
-                                    onClose = { activePopup = null }
-                                )
-                            }
-                            null -> {}
                         }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // Size Slider
+                        Row(
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Size", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                            Text("${String.format("%.1f", activeSize)} pt", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Slider(
+                            value = activeSize,
+                            onValueChange = onSizeChange,
+                            valueRange = 0.5f..48f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color.White,
+                                activeTrackColor = Color(0xFF48CAE4)
+                            ),
+                            modifier = Modifier.height(26.dp)
+                        )
+
+                        // Opacity Slider
+                        Row(
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Opacity", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                            Text("${(activeOpacity * 100).roundToInt()}%", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Slider(
+                            value = activeOpacity,
+                            onValueChange = onOpacityChange,
+                            valueRange = 0.05f..1.0f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color.White,
+                                activeTrackColor = Color(0xFF0077B6)
+                            ),
+                            modifier = Modifier.height(26.dp)
+                        )
+
+                        // Smoothing Slider
+                        Row(
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Smoothing", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                            Text("${(activeSmoothing * 100).roundToInt()}%", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Slider(
+                            value = activeSmoothing,
+                            onValueChange = onSmoothingChange,
+                            valueRange = 0.0f..1.0f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color.White,
+                                activeTrackColor = Color(0xFF90E0EF)
+                            ),
+                            modifier = Modifier.height(26.dp)
+                        )
                     }
                 }
             }
         }
 
+        // Comprehensive Brush Selection Dialog
         if (showBrushDialog) {
             BrushSelectionDialog(
                 currentBrush = activeBrush,
+                currentColor = activeColor,
+                currentSize = activeSize,
                 onSelectBrush = {
                     onChangeBrushType(it)
                     showBrushDialog = false
@@ -450,191 +428,188 @@ fun ToolWheel(
     }
 }
 
-@Composable
-fun SizeVisualIcon(isActive: Boolean, sizePt: Float, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
-        val strokeColor = if (isActive) Color(0xFF48CAE4) else Color(0xFFCBD5E1)
-        val center = Offset(size.width / 2f, size.height / 2f)
-        val maxRadius = size.width / 2f - 2.dp.toPx()
-
-        drawCircle(color = strokeColor, radius = maxRadius, center = center, style = Stroke(width = 1.6.dp.toPx()))
-        val innerRadius = (maxRadius * (sizePt / 48f).coerceIn(0.25f, 0.85f))
-        drawCircle(color = strokeColor, radius = innerRadius, center = center)
-    }
-}
-
-@Composable
-fun OpacityVisualIcon(isActive: Boolean, opacity: Float, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
-        val ringColor = if (isActive) Color(0xFF48CAE4) else Color(0xFFCBD5E1)
-        val fillColor = if (isActive) Color(0xFF48CAE4) else Color(0xFFE2E8F0)
-        val center = Offset(size.width / 2f, size.height / 2f)
-        val radius = size.width / 2f - 2.dp.toPx()
-
-        drawCircle(color = ringColor, radius = radius, center = center, style = Stroke(width = 1.6.dp.toPx()))
-        drawArc(
-            color = fillColor.copy(alpha = opacity.coerceIn(0.2f, 1.0f)),
-            startAngle = -90f,
-            sweepAngle = 180f,
-            useCenter = true,
-            topLeft = Offset(center.x - radius, center.y - radius),
-            size = Size(radius * 2f, radius * 2f)
-        )
-    }
-}
-
-@Composable
-fun SmoothingVisualIcon(isActive: Boolean, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
-        val lineColor = if (isActive) Color(0xFF48CAE4) else Color(0xFFCBD5E1)
-        val w = size.width
-        val h = size.height
-
-        val path = Path().apply {
-            moveTo(w * 0.18f, h * 0.80f)
-            cubicTo(w * 0.30f, h * 0.20f, w * 0.70f, h * 0.85f, w * 0.85f, h * 0.22f)
-        }
-
-        drawPath(path = path, color = lineColor, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-        drawCircle(color = lineColor, radius = 1.8.dp.toPx(), center = Offset(w * 0.85f, h * 0.22f))
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun ModularSliderCard(
-    title: String,
-    valueDisplay: String,
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    onValueChange: (Float) -> Unit,
-    activeColor: Color,
-    presets: List<Float>,
-    presetFormatter: (Float) -> String,
-    onSelectPreset: (Float) -> Unit,
-    onClose: () -> Unit
-) {
-    Column {
-        Row(
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(text = title, color = activeColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            IconButton(onClick = onClose, modifier = Modifier.size(24.dp)) {
-                Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = Color(0xFF94A3B8), modifier = Modifier.size(16.dp))
-            }
-        }
-
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(text = valueDisplay, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Slider(
-            value = value,
-            onValueChange = onValueChange,
-            valueRange = valueRange,
-            colors = SliderDefaults.colors(thumbColor = activeColor, activeTrackColor = activeColor, inactiveTrackColor = Color(0xFF2E354A))
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            presets.forEach { preset ->
-                val isSelected = (value - preset).let { kotlin.math.abs(it) < 0.02f }
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = if (isSelected) activeColor else Color(0xFF262A3C),
-                    modifier = Modifier.clickable { onSelectPreset(preset) }
-                ) {
-                    Text(
-                        text = presetFormatter(preset),
-                        color = if (isSelected) Color.Black else Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-
+/**
+ * Brush selection modal showcasing all genuine Concepts brushes with a live stroke preview card.
+ */
 @Composable
 fun BrushSelectionDialog(
     currentBrush: BrushType,
+    currentColor: Int,
+    currentSize: Float,
     onSelectBrush: (BrushType) -> Unit,
     onDismiss: () -> Unit
 ) {
+    var selectedBrush by remember { mutableStateOf(currentBrush) }
+
+    // List of real Concepts Brushes (Wire explicitly excluded from default palette)
+    val conceptsBrushes = listOf(
+        BrushType.PEN,
+        BrushType.SOFT_PENCIL,
+        BrushType.HARD_PENCIL,
+        BrushType.FOUNTAIN_PEN,
+        BrushType.MARKER,
+        BrushType.WATERCOLOR,
+        BrushType.AIRBRUSH,
+        BrushType.LASSO,
+        BrushType.ERASER_HARD,
+        BrushType.ERASER_SOFT,
+        BrushType.SLICE,
+        BrushType.NUDGE
+    )
+
     Dialog(onDismissRequest = onDismiss) {
         Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = Color(0xFF181A26),
-            border = androidx.compose.foundation.BorderStroke(1.2.dp, Color(0xFF333A50)),
-            modifier = Modifier.width(320.dp).padding(16.dp)
+            shape = RoundedCornerShape(24.dp),
+            color = Color(0xFF181A24),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF363B4E)),
+            shadowElevation = 24.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+                .testTag("brush_selection_dialog")
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(text = "Select Instrument", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(12.dp))
+            Column(modifier = Modifier.padding(18.dp)) {
+                // Header
+                Row(
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column {
+                        Text(
+                            text = "Concepts Brushes & Tools",
+                            color = Color(0xFFF1F5F9),
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Select parametric vector inking tool",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 11.sp
+                        )
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = Color(0xFF94A3B8))
+                    }
+                }
 
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Live Stroke Preview Card
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0xFF10121A),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF282C3D)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(72.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(8.dp)) {
+                        Canvas(modifier = Modifier.fillMaxWidth().height(50.dp)) {
+                            val w = size.width
+                            val h = size.height
+                            val path = Path().apply {
+                                moveTo(20f, h / 2f + 10f)
+                                cubicTo(
+                                    w * 0.25f, h * 0.15f,
+                                    w * 0.70f, h * 0.85f,
+                                    w - 20f, h / 2f - 10f
+                                )
+                            }
+                            drawPath(
+                                path = path,
+                                color = if (selectedBrush.isUtility) Color(0xFF48CAE4) else Color(currentColor),
+                                style = Stroke(
+                                    width = (currentSize * 1.5f).coerceIn(3f, 32f),
+                                    cap = StrokeCap.Round,
+                                    join = StrokeJoin.Round
+                                )
+                            )
+                        }
+                        Text(
+                            text = "${selectedBrush.displayName} Preview",
+                            color = Color(0xFF64748B),
+                            fontSize = 9.sp,
+                            modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Brushes Grid
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
+                    columns = GridCells.Fixed(3),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.height(240.dp)
                 ) {
-                    items(BrushType.entries.toTypedArray()) { brush ->
-                        val isSelected = (brush == currentBrush)
+                    items(conceptsBrushes) { brush ->
+                        val isSelected = (brush == selectedBrush)
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = if (isSelected) Color(0xFF273347) else Color(0xFF202332),
+                            color = if (isSelected) Color(0xFF2A3146) else Color(0xFF1E212E),
                             border = androidx.compose.foundation.BorderStroke(
-                                width = if (isSelected) 1.5.dp else 1.dp,
-                                color = if (isSelected) Color(0xFF48CAE4) else Color(0xFF2E3448)
+                                width = if (isSelected) 2.dp else 1.dp,
+                                color = if (isSelected) Color(0xFF48CAE4) else Color(0xFF34394E)
                             ),
-                            modifier = Modifier.clickable { onSelectBrush(brush) }.padding(2.dp)
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { selectedBrush = brush }
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(10.dp)) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center,
+                                modifier = Modifier.padding(10.dp)
+                            ) {
                                 Icon(
                                     imageVector = getBrushIcon(brush),
                                     contentDescription = brush.displayName,
-                                    tint = if (isSelected) Color(0xFF48CAE4) else Color(0xFF94A3B8),
-                                    modifier = Modifier.size(20.dp)
+                                    tint = if (isSelected) Color(0xFF48CAE4) else Color(0xFFCBD5E1),
+                                    modifier = Modifier.size(24.dp)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(text = brush.displayName, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = brush.displayName,
+                                    color = if (isSelected) Color.White else Color(0xFF94A3B8),
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
                             }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(14.dp))
+
                 Button(
-                    onClick = onDismiss,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF282E42)),
+                    onClick = { onSelectBrush(selectedBrush) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0077B6)),
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Close", color = Color.White)
+                    Text("Select ${selectedBrush.displayName}", color = Color.White, fontWeight = FontWeight.Bold)
                 }
             }
         }
     }
 }
 
-private fun getBrushIcon(brushType: BrushType): ImageVector {
-    return when (brushType) {
-        BrushType.PEN -> Icons.Default.Create
-        BrushType.PENCIL -> Icons.Default.Edit
-        BrushType.MARKER -> Icons.Default.ModeEdit
-        BrushType.HIGHLIGHTER -> Icons.Default.Highlight
+fun getBrushIcon(type: BrushType): ImageVector {
+    return when (type) {
+        BrushType.PEN -> Icons.Default.Edit
+        BrushType.SOFT_PENCIL -> Icons.Default.Create
+        BrushType.HARD_PENCIL -> Icons.Default.ModeEdit
+        BrushType.FOUNTAIN_PEN -> Icons.Default.Brush
+        BrushType.WIRE -> Icons.Default.RadioButtonUnchecked
+        BrushType.MARKER -> Icons.Default.Highlight
         BrushType.WATERCOLOR -> Icons.Default.WaterDrop
         BrushType.AIRBRUSH -> Icons.Default.Air
-        BrushType.ERASER -> Icons.Default.RadioButtonUnchecked
-        BrushType.LASSO -> Icons.Default.CropFree
         BrushType.SLICE -> Icons.Default.ContentCut
+        BrushType.NUDGE -> Icons.Default.AutoFixHigh
+        BrushType.ERASER_HARD -> Icons.Default.CropFree
+        BrushType.ERASER_SOFT -> Icons.Default.InvertColors
+        BrushType.ERASER_MASK -> Icons.Default.CropFree
+        BrushType.LASSO -> Icons.Default.CropFree
     }
 }

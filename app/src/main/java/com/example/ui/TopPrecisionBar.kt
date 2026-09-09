@@ -87,8 +87,8 @@ fun TopPrecisionBar(
     onSelectGrid: (GridType) -> Unit,
     onToggleAngleSnapping: () -> Unit,
     onSelectCanvasBgColor: (Int) -> Unit,
-    onUndo: () -> Unit = {},
-    onRedo: () -> Unit = {},
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
     onToggleLayers: () -> Unit,
     onImportDeviceMedia: () -> Unit,
     onImportSampleBlueprint: () -> Unit,
@@ -96,10 +96,9 @@ fun TopPrecisionBar(
     onExportPng: () -> Unit,
     onExportJson: () -> Unit,
     onOpenBlueprintSpecs: () -> Unit,
-    pressureCurve: Float = 0.5f,
-    onPressureCurveChange: (Float) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    var showPrecisionDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showImportMenu by remember { mutableStateOf(false) }
     var showExportMenu by remember { mutableStateOf(false) }
@@ -120,7 +119,7 @@ fun TopPrecisionBar(
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         ) {
-            // LEFT GROUP: Gallery back, Project Title, Zoom In/Out, Dynamic Angle Indicator
+            // LEFT GROUP: Gallery back, Project Title, Zoom, Angle, Undo / Redo (>=48dp touch targets)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // Back to Gallery Button (Touch Target >= 48dp)
                 IconButton(
@@ -190,40 +189,116 @@ fun TopPrecisionBar(
                     )
                 }
 
-                // Rotation Indicator: Dynamically set visibility to hidden/invisible whenever the angle is strictly 0
-                if (kotlin.math.abs(rotationDeg) > 0.05f) {
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFF2A2E42),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF48CAE4)),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable { onResetRotation() }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                            .testTag("angle_reset_badge")
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.RotateRight,
-                                contentDescription = "Reset Angle to 0°",
-                                tint = Color(0xFF48CAE4),
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = "${rotationDeg.toInt()}°",
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // Angle indicator with tap-to-zero (0°)
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (Math.abs(rotationDeg) > 0.5f) Color(0xFF2A2E42) else Color(0xFF1E212E),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (Math.abs(rotationDeg) > 0.5f) Color(0xFF48CAE4) else Color(0xFF33384B)
+                    ),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onResetRotation() }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .testTag("angle_reset_badge")
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.RotateRight,
+                            contentDescription = "Reset Angle to 0°",
+                            tint = if (Math.abs(rotationDeg) > 0.5f) Color(0xFF48CAE4) else Color(0xFF94A3B8),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(
+                            text = "${rotationDeg.toInt()}°",
+                            color = if (Math.abs(rotationDeg) > 0.5f) Color.White else Color(0xFF94A3B8),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Precision & Grid Settings Trigger
+                IconButton(
+                    onClick = { showPrecisionDialog = true },
+                    modifier = Modifier.size(48.dp).testTag("grid_menu_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.GridOn,
+                        contentDescription = "Precision & Grid Settings",
+                        tint = if (activeGrid != GridType.NONE) Color(0xFF48CAE4) else Color(0xFFCBD5E1),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                // Undo Button (Touch Target >= 48dp)
+                IconButton(
+                    onClick = onUndo,
+                    modifier = Modifier.size(48.dp).testTag("undo_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Undo,
+                        contentDescription = "Undo (2-finger tap)",
+                        tint = Color(0xFFCBD5E1),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                // Redo Button (Touch Target >= 48dp)
+                IconButton(
+                    onClick = onRedo,
+                    modifier = Modifier.size(48.dp).testTag("redo_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Redo,
+                        contentDescription = "Redo (3-finger tap)",
+                        tint = Color(0xFFCBD5E1),
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
             }
 
-            // RIGHT GROUP: Import Menu, Layers Badge, Export Menu, Main Settings Menu
+            // RIGHT GROUP: Touch Mode, Import, Layers Badge, Export, S Pen Settings
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // Touch Mode Toggle (Draw vs Pan)
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (fingerMode == FingerMode.DRAW) Color(0xFF0077B6).copy(alpha = 0.35f) else Color(0xFF5A189A).copy(alpha = 0.35f),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (fingerMode == FingerMode.DRAW) Color(0xFF48CAE4) else Color(0xFFC77DFF)
+                    ),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onToggleFingerMode() }
+                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                        .testTag("finger_mode_toggle")
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = if (fingerMode == FingerMode.DRAW) Icons.Default.Edit else Icons.Default.PanTool,
+                            contentDescription = "Toggle Touch Mode",
+                            tint = if (fingerMode == FingerMode.DRAW) Color(0xFF48CAE4) else Color(0xFFC77DFF),
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (fingerMode == FingerMode.DRAW) "Touch: Draw" else "Touch: Pan",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
                 // Import Menu Trigger
                 Box {
                     IconButton(
@@ -332,72 +407,77 @@ fun TopPrecisionBar(
                     }
                 }
 
-                // Main Settings Menu Trigger (Contains Grid, Background, Touch Mode, S Pen, Blueprint)
+                // Settings & Stylus Calibration Modal Trigger
                 IconButton(
                     onClick = { showSettingsDialog = true },
                     modifier = Modifier.size(48.dp).testTag("settings_menu_button")
                 ) {
                     Icon(
                         imageVector = Icons.Default.Settings,
-                        contentDescription = "Settings & Preferences",
+                        contentDescription = "Stylus & Settings",
                         tint = Color(0xFFCBD5E1),
                         modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                // Architecture Specs Blueprint
+                IconButton(
+                    onClick = onOpenBlueprintSpecs,
+                    modifier = Modifier.size(40.dp).testTag("blueprint_specs_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Description,
+                        contentDescription = "Architecture Blueprint",
+                        tint = Color(0xFFF4A261),
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
         }
     }
 
-    // Main Settings & Preferences Dialog
-    if (showSettingsDialog) {
-        MainSettingsDialog(
+    // Precision & Grid Settings Dialog
+    if (showPrecisionDialog) {
+        PrecisionGridDialog(
             activeGrid = activeGrid,
             angleSnapping = angleSnapping,
             activeBgColor = canvasBgColor,
-            fingerMode = fingerMode,
             onSelectGrid = onSelectGrid,
             onToggleAngleSnapping = onToggleAngleSnapping,
             onSelectBgColor = onSelectCanvasBgColor,
+            onDismiss = { showPrecisionDialog = false }
+        )
+    }
+
+    // Settings & S Pen Calibration Dialog
+    if (showSettingsDialog) {
+        StylusSettingsDialog(
+            fingerMode = fingerMode,
             onToggleFingerMode = onToggleFingerMode,
-            onOpenBlueprintSpecs = {
-                showSettingsDialog = false
-                onOpenBlueprintSpecs()
-            },
-            pressureCurve = pressureCurve,
-            onPressureCurveChange = onPressureCurveChange,
             onDismiss = { showSettingsDialog = false }
         )
     }
 }
 
 /**
- * Main Settings & Preferences Dialog
- * Integrates Precision Grid, Canvas Paper Background, Touch Pan vs Draw, Stylus Calibration, and Architecture Blueprint.
+ * Precision & Grid Settings Popup (Grid Type, Snap to Grid, Canvas Background: Dark, White, Blueprint Blue, Sepia)
  */
 @Composable
-fun MainSettingsDialog(
+fun PrecisionGridDialog(
     activeGrid: GridType,
     angleSnapping: Boolean,
     activeBgColor: Int,
-    fingerMode: FingerMode,
     onSelectGrid: (GridType) -> Unit,
     onToggleAngleSnapping: () -> Unit,
     onSelectBgColor: (Int) -> Unit,
-    onToggleFingerMode: () -> Unit,
-    onOpenBlueprintSpecs: () -> Unit,
-    pressureCurve: Float = 0.5f,
-    onPressureCurveChange: (Float) -> Unit = {},
     onDismiss: () -> Unit
 ) {
-    var selectedShortcut by remember { mutableStateOf("Eraser / Lasso Toggle") }
-    val shortcuts = listOf("Eraser / Lasso Toggle", "Color Picker", "Pan Canvas Only")
-
     val canvasColors = remember {
         listOf(
             android.graphics.Color.parseColor("#15161C") to "Dark Matte",
             android.graphics.Color.parseColor("#FAFAFA") to "White Paper",
             android.graphics.Color.parseColor("#1A365D") to "Blueprint Blue",
-            android.graphics.Color.parseColor("#F4ECD8") to "Sepia"
+            android.graphics.Color.parseColor("#F4ECD8") to "Architectural Sepia"
         )
     }
 
@@ -409,19 +489,16 @@ fun MainSettingsDialog(
             shadowElevation = 24.dp,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp)
+                .padding(16.dp)
         ) {
-            Column(
-                modifier = Modifier
-                    .padding(20.dp)
-            ) {
+            Column(modifier = Modifier.padding(20.dp)) {
                 Row(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "Settings & Preferences",
+                        text = "Precision & Grid Settings",
                         color = Color.White,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold
@@ -431,11 +508,11 @@ fun MainSettingsDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // Precision Grid Style
-                Text("Precision Grid", color = Color(0xFF48CAE4), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(modifier = Modifier.height(6.dp))
+                // Grid Type Selection
+                Text("Grid Style", color = Color(0xFF48CAE4), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -453,7 +530,7 @@ fun MainSettingsDialog(
                                 .weight(1f)
                                 .clip(RoundedCornerShape(10.dp))
                                 .clickable { onSelectGrid(grid) }
-                                .padding(vertical = 7.dp)
+                                .padding(vertical = 8.dp)
                         ) {
                             Box(
                                 contentAlignment = Alignment.Center,
@@ -470,17 +547,17 @@ fun MainSettingsDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // Angle Snapping Toggle
+                // Snap to Grid / Angle Snapping
                 Row(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column {
-                        Text("Angle Snapping", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                        Text("Snaps rotation to 0°, 45°, 90°, 180°", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                        Text("Angle Snapping", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text("Snaps viewport to 0°, 45°, 90°, 180°", color = Color(0xFF94A3B8), fontSize = 10.sp)
                     }
                     Switch(
                         checked = angleSnapping,
@@ -492,11 +569,11 @@ fun MainSettingsDialog(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 // Canvas Paper Background Color
                 Text("Canvas Paper Background", color = Color(0xFF48CAE4), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -509,11 +586,11 @@ fun MainSettingsDialog(
                                 .weight(1f)
                                 .clip(RoundedCornerShape(10.dp))
                                 .clickable { onSelectBgColor(c) }
-                                .padding(vertical = 3.dp)
+                                .padding(vertical = 4.dp)
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(28.dp)
+                                    .size(32.dp)
                                     .clip(CircleShape)
                                     .background(Color(c))
                                     .border(
@@ -522,7 +599,7 @@ fun MainSettingsDialog(
                                         shape = CircleShape
                                     )
                             )
-                            Spacer(modifier = Modifier.height(3.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = name,
                                 color = if (isSelected) Color.White else Color(0xFF94A3B8),
@@ -532,17 +609,106 @@ fun MainSettingsDialog(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Settings & S Pen Calibration Dialog
+ */
+@Composable
+fun StylusSettingsDialog(
+    fingerMode: FingerMode,
+    onToggleFingerMode: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var pressureCurve by remember { mutableFloatStateOf(0.5f) }
+    var selectedShortcut by remember { mutableStateOf("Eraser / Lasso Toggle") }
+
+    val shortcuts = listOf("Eraser / Lasso Toggle", "Color Picker", "Pan Canvas Only")
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = Color(0xFF181A24),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF353A4E)),
+            shadowElevation = 24.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Stylus & Gesture Settings",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = Color(0xFF94A3B8))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // S Pen Button Remapping
+                Text("S Pen Side Button Action", color = Color(0xFF48CAE4), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(6.dp))
+                for (sc in shortcuts) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedShortcut = sc }
+                            .padding(vertical = 4.dp)
+                    ) {
+                        RadioButton(
+                            selected = (selectedShortcut == sc),
+                            onClick = { selectedShortcut = sc },
+                            colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF48CAE4))
+                        )
+                        Text(text = sc, color = Color.White, fontSize = 12.sp)
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Finger Touch Mode (Pan vs Draw)
+                // Pressure Sensitivity Calibration
+                Text("S Pen Pressure Calibration", color = Color(0xFF48CAE4), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Row(
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Soft", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                    Text("Normal", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                    Text("Firm", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                }
+                Slider(
+                    value = pressureCurve,
+                    onValueChange = { pressureCurve = it },
+                    valueRange = 0.1f..1.0f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color.White,
+                        activeTrackColor = Color(0xFF48CAE4)
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Finger Touch Interaction
                 Row(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column {
-                        Text("Finger Action", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        Text("Finger Action", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                         Text(
                             if (fingerMode == FingerMode.PAN) "Finger pans canvas (Recommended)" else "Finger draws ink",
                             color = Color(0xFF94A3B8),
@@ -557,65 +723,6 @@ fun MainSettingsDialog(
                             checkedTrackColor = Color(0xFF0077B6)
                         )
                     )
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // S Pen Pressure Calibration
-                Text("S Pen Pressure Calibration", color = Color(0xFF48CAE4), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                Row(
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Soft", color = Color(0xFF94A3B8), fontSize = 9.sp)
-                    Text("Normal", color = Color(0xFF94A3B8), fontSize = 9.sp)
-                    Text("Firm", color = Color(0xFF94A3B8), fontSize = 9.sp)
-                }
-                Slider(
-                    value = pressureCurve,
-                    onValueChange = { onPressureCurveChange(it) },
-                    valueRange = 0.1f..1.0f,
-                    colors = SliderDefaults.colors(
-                        thumbColor = Color.White,
-                        activeTrackColor = Color(0xFF48CAE4)
-                    )
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Concepts 1:1 Architecture Blueprint Spec link
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF232738),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF4A261).copy(alpha = 0.6f)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .clickable { onOpenBlueprintSpecs() }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Description,
-                            contentDescription = "Architecture Blueprint",
-                            tint = Color(0xFFF4A261),
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(
-                                text = "Concepts 1:1 Architecture Blueprint",
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = "View technical specs, math & hardware pipeline",
-                                color = Color(0xFF94A3B8),
-                                fontSize = 9.sp
-                            )
-                        }
-                    }
                 }
             }
         }

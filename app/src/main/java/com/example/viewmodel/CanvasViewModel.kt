@@ -7,10 +7,7 @@ import android.graphics.RectF
 import androidx.lifecycle.ViewModel
 import com.example.data.DrawingRepository
 import com.example.data.ProjectDrawingData
-import com.example.data.SettingsPreferences
-import com.example.data.TopBarPreferences
 import com.example.data.UserSettingsManager
-import com.example.data.WheelPreferencesData
 import com.example.engine.GeometryMath
 import com.example.model.BrushType
 import com.example.model.CanvasImageElement
@@ -47,11 +44,10 @@ class CanvasViewModel : ViewModel() {
 
     fun setUserSettings(settings: UserSettingsManager) {
         this.userSettings = settings
-        // Restore persistent configurations from user_wheel_preferences.json
-        val loaded = settings.wheelPreferencesManager.loadPreferences(initialSlots)
-        val savedSlots = loaded.toolSlots
+        // Restore persistent configurations
+        val savedSlots = settings.getToolSlots(initialSlots)
         _toolSlots.value = savedSlots
-        val slotIdx = loaded.activeSlotIndex.coerceIn(0, savedSlots.size - 1)
+        val slotIdx = settings.getActiveSlotIndex().coerceIn(0, savedSlots.size - 1)
         _activeSlotIndex.value = slotIdx
         val activeSlot = savedSlots[slotIdx]
         _activeBrushType.value = activeSlot.brushType
@@ -59,39 +55,9 @@ class CanvasViewModel : ViewModel() {
         _activeStrokeWidth.value = activeSlot.strokeWidth
         _activeOpacity.value = activeSlot.opacity
         _activeSmoothing.value = activeSlot.smoothing
-        _gridType.value = loaded.topBar.gridType
-        _canvasBackgroundColor.value = loaded.topBar.canvasBgColor
-        _fingerMode.value = loaded.topBar.fingerMode
-        _viewport.value = _viewport.value.copy(angleSnapping = loaded.topBar.angleSnapping)
-        _pressureCurve.value = loaded.settings.pressureCurve
-    }
-
-    fun saveUserWheelPreferences() {
-        userSettings?.let { s ->
-            val data = WheelPreferencesData(
-                activeSlotIndex = _activeSlotIndex.value,
-                toolSlots = _toolSlots.value,
-                topBar = TopBarPreferences(
-                    gridType = _gridType.value,
-                    canvasBgColor = _canvasBackgroundColor.value,
-                    angleSnapping = _viewport.value.angleSnapping,
-                    fingerMode = _fingerMode.value
-                ),
-                settings = SettingsPreferences(
-                    pressureCurve = _pressureCurve.value,
-                    spenShortcut = "Eraser / Lasso Toggle"
-                )
-            )
-            s.wheelPreferencesManager.savePreferences(data)
-        }
-    }
-
-    private val _pressureCurve = MutableStateFlow(0.5f)
-    val pressureCurve: StateFlow<Float> = _pressureCurve.asStateFlow()
-
-    fun setPressureCurve(curve: Float) {
-        _pressureCurve.value = curve
-        saveUserWheelPreferences()
+        _gridType.value = settings.getGridType()
+        _canvasBackgroundColor.value = settings.getBackgroundColor()
+        _fingerMode.value = settings.getFingerMode()
     }
 
     private val _currentProjectId = MutableStateFlow<String?>(null)
@@ -333,14 +299,12 @@ class CanvasViewModel : ViewModel() {
     fun setFingerMode(mode: FingerMode) {
         _fingerMode.value = mode
         userSettings?.saveFingerMode(mode)
-        saveUserWheelPreferences()
     }
 
     fun toggleFingerMode() {
         val newMode = if (_fingerMode.value == FingerMode.DRAW) FingerMode.PAN else FingerMode.DRAW
         _fingerMode.value = newMode
         userSettings?.saveFingerMode(newMode)
-        saveUserWheelPreferences()
     }
 
     fun resetViewport() {
@@ -353,19 +317,15 @@ class CanvasViewModel : ViewModel() {
 
     fun toggleAngleSnapping() {
         _viewport.value = _viewport.value.copy(angleSnapping = !_viewport.value.angleSnapping)
-        saveUserWheelPreferences()
     }
 
     fun setCanvasBackgroundColor(color: Int) {
         _canvasBackgroundColor.value = color
-        userSettings?.saveBackgroundColor(color)
-        saveUserWheelPreferences()
     }
 
     fun setGridType(grid: GridType) {
         _gridType.value = grid
         userSettings?.saveGridType(grid)
-        saveUserWheelPreferences()
     }
 
     // S Pen and Inking Flow
@@ -1011,7 +971,6 @@ class CanvasViewModel : ViewModel() {
             userSettings?.saveActiveSize(slot.strokeWidth)
             userSettings?.saveActiveOpacity(slot.opacity)
             userSettings?.saveActiveSmoothing(slot.smoothing)
-            saveUserWheelPreferences()
         }
     }
 
@@ -1020,7 +979,6 @@ class CanvasViewModel : ViewModel() {
         updateCurrentSlot { it.copy(color = color) }
         userSettings?.saveActiveColor(color)
         userSettings?.saveToolSlots(_toolSlots.value)
-        saveUserWheelPreferences()
     }
 
     fun setActiveBrush(brushType: BrushType) {
@@ -1028,7 +986,6 @@ class CanvasViewModel : ViewModel() {
         updateCurrentSlot { it.copy(brushType = brushType) }
         userSettings?.saveActiveBrushType(brushType)
         userSettings?.saveToolSlots(_toolSlots.value)
-        saveUserWheelPreferences()
     }
 
     fun setActiveStrokeWidth(width: Float) {
@@ -1036,7 +993,6 @@ class CanvasViewModel : ViewModel() {
         updateCurrentSlot { it.copy(strokeWidth = width) }
         userSettings?.saveActiveSize(width)
         userSettings?.saveToolSlots(_toolSlots.value)
-        saveUserWheelPreferences()
     }
 
     fun setActiveOpacity(opacity: Float) {
@@ -1044,7 +1000,6 @@ class CanvasViewModel : ViewModel() {
         updateCurrentSlot { it.copy(opacity = opacity) }
         userSettings?.saveActiveOpacity(opacity)
         userSettings?.saveToolSlots(_toolSlots.value)
-        saveUserWheelPreferences()
     }
 
     fun setActiveSmoothing(smoothing: Float) {
@@ -1052,7 +1007,6 @@ class CanvasViewModel : ViewModel() {
         updateCurrentSlot { it.copy(smoothing = smoothing) }
         userSettings?.saveActiveSmoothing(smoothing)
         userSettings?.saveToolSlots(_toolSlots.value)
-        saveUserWheelPreferences()
     }
 
     private fun updateCurrentSlot(transform: (ToolSlot) -> ToolSlot) {

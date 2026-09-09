@@ -117,9 +117,7 @@ class SPenInputHandler(
         val action = event.actionMasked
         val sx = event.getX(index)
         val sy = event.getY(index)
-        val rawPressure = event.getAxisValue(MotionEvent.AXIS_PRESSURE, index).takeIf { it > 0.001f }
-            ?: event.getPressure(index)
-        val pressure = rawPressure.coerceIn(0.01f, 1.0f)
+        val pressure = event.getPressure(index).coerceIn(0.01f, 1.0f)
         val tilt = event.getAxisValue(MotionEvent.AXIS_TILT, index)
         val orientation = event.getAxisValue(MotionEvent.AXIS_ORIENTATION, index)
 
@@ -167,9 +165,7 @@ class SPenInputHandler(
                 for (h in 0 until event.historySize) {
                     val hx = event.getHistoricalX(index, h)
                     val hy = event.getHistoricalY(index, h)
-                    val rawHp = event.getHistoricalAxisValue(MotionEvent.AXIS_PRESSURE, index, h).takeIf { it > 0.001f }
-                        ?: event.getHistoricalPressure(index, h)
-                    val hp = rawHp.coerceIn(0.01f, 1.0f)
+                    val hp = event.getHistoricalPressure(index, h).coerceIn(0.01f, 1.0f)
                     val htilt = event.getHistoricalAxisValue(MotionEvent.AXIS_TILT, index, h)
                     val horient = event.getHistoricalAxisValue(MotionEvent.AXIS_ORIENTATION, index, h)
                     val htime = event.getHistoricalEventTime(h)
@@ -210,10 +206,6 @@ class SPenInputHandler(
         val action = event.actionMasked
         val count = event.pointerCount
 
-        val currentFingerPressure = (event.getAxisValue(MotionEvent.AXIS_PRESSURE).takeIf { it > 0.01f }
-            ?: event.getPressure(0).takeIf { it > 0.01f }
-            ?: 0.5f).coerceIn(0.05f, 1.0f)
-
         when (action) {
             MotionEvent.ACTION_DOWN -> {
                 cancelPendingLongPress()
@@ -232,7 +224,7 @@ class SPenInputHandler(
                     val pt = RawPoint(
                         x = event.x,
                         y = event.y,
-                        pressure = currentFingerPressure,
+                        pressure = 1.0f,
                         timestampNs = System.nanoTime()
                     )
                     callbacks.onPenStrokeStart(pt, isButtonPressed = false)
@@ -252,7 +244,7 @@ class SPenInputHandler(
                     val pt = RawPoint(
                         x = event.x,
                         y = event.y,
-                        pressure = currentFingerPressure,
+                        pressure = 1.0f,
                         timestampNs = System.nanoTime()
                     )
                     if (!isStrokeSuppressed) {
@@ -289,14 +281,11 @@ class SPenInputHandler(
                     if (fingerMode == FingerMode.DRAW && isFingerDrawing && !isStrokeSuppressed) {
                         val points = mutableListOf<RawPoint>()
                         for (h in 0 until event.historySize) {
-                            val histPress = (event.getHistoricalAxisValue(MotionEvent.AXIS_PRESSURE, 0, h).takeIf { it > 0.01f }
-                                ?: event.getHistoricalPressure(0, h).takeIf { it > 0.01f }
-                                ?: currentFingerPressure).coerceIn(0.05f, 1.0f)
                             points.add(
                                 RawPoint(
                                     x = event.getHistoricalX(h),
                                     y = event.getHistoricalY(h),
-                                    pressure = histPress,
+                                    pressure = 1.0f,
                                     timestampNs = event.getHistoricalEventTime(h) * 1_000_000L
                                 )
                             )
@@ -305,7 +294,7 @@ class SPenInputHandler(
                             RawPoint(
                                 x = event.x,
                                 y = event.y,
-                                pressure = currentFingerPressure,
+                                pressure = 1.0f,
                                 timestampNs = System.nanoTime()
                             )
                         )

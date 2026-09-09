@@ -58,10 +58,8 @@ class NativeCanvasSurface(
     var isCurrentLasso: Boolean = false
     var activeColor: Int = Color.WHITE
     var activeWidth: Float = 3.5f
-    var activeOpacity: Float = 1.0f
     var activeBrush: BrushType = BrushType.PEN
     var fingerMode: FingerMode = FingerMode.PAN
-    var pressureCurve: Float = 0.5f
 
     // Callbacks for ViewModel dispatch
     var onPenStart: ((RawPoint, Boolean, Float, Float) -> Unit)? = null
@@ -541,12 +539,10 @@ class NativeCanvasSurface(
                     lassoPath.lineTo(activePoints[i].x, activePoints[i].y)
                 }
                 canvas.drawPath(lassoPath, lassoMarqueePaint)
-            } else if (activeBrush == BrushType.WIRE) {
-                // Wire has uniform width without pressure taper
+            } else {
                 strokePaint.color = activeColor
                 strokePaint.strokeWidth = activeWidth
-                strokePaint.strokeCap = Paint.Cap.BUTT
-                strokePaint.alpha = (activeOpacity * 255f).toInt().coerceIn(0, 255)
+                strokePaint.alpha = 255
 
                 if (activePoints.size == 1) {
                     canvas.drawCircle(activePoints[0].x, activePoints[0].y, activeWidth / 2f, strokePaint)
@@ -564,121 +560,59 @@ class NativeCanvasSurface(
                     strokePath.lineTo(last.x, last.y)
                     canvas.drawPath(strokePath, strokePaint)
                 }
-            } else {
-                // Concepts S Pen Hardware Dynamic Pressure Mapping for all drawing brushes
-                val baseAlpha = (activeOpacity * 255f).toInt().coerceIn(0, 255)
-                strokePaint.color = activeColor
-                strokePaint.strokeCap = if (activeBrush == BrushType.MARKER) Paint.Cap.SQUARE else Paint.Cap.ROUND
-                strokePaint.strokeJoin = Paint.Join.ROUND
-
-                if (activePoints.size == 1) {
-                    val p = activePoints[0]
-                    val dynW = computeDynamicWidth(activeBrush, activeWidth, p.pressure, pressureCurve)
-                    val dynA = computeDynamicAlpha(activeBrush, baseAlpha, p.pressure)
-                    strokePaint.strokeWidth = dynW
-                    strokePaint.alpha = dynA
-                    canvas.drawCircle(p.x, p.y, dynW / 2f, strokePaint)
-                } else {
-                    for (i in 1 until activePoints.size) {
-                        val p0 = activePoints[i - 1]
-                        val p1 = activePoints[i]
-                        val segPress = ((p0.pressure + p1.pressure) / 2f).coerceIn(0.01f, 1.0f)
-                        val dynW = computeDynamicWidth(activeBrush, activeWidth, segPress, pressureCurve)
-                        val dynA = computeDynamicAlpha(activeBrush, baseAlpha, segPress)
-                        strokePaint.strokeWidth = dynW
-                        strokePaint.alpha = dynA
-                        canvas.drawLine(p0.x, p0.y, p1.x, p1.y, strokePaint)
-                    }
-                }
             }
         }
 
         canvas.restore()
     }
 
-    private fun computeDynamicWidth(brush: BrushType, baseW: Float, rawP: Float, curve: Float): Float {
-        if (brush.isUtility || brush == BrushType.WIRE) return baseW
-        val gamma = 0.5f + curve * 1.0f
-        val p = rawP.coerceIn(0.01f, 1.0f).toDouble().let { Math.pow(it, gamma.toDouble()) }.toFloat()
-        val minRatio = when (brush) {
-            BrushType.FOUNTAIN_PEN -> 0.15f
-            BrushType.WATERCOLOR -> 0.25f
-            BrushType.AIRBRUSH -> 0.30f
-            BrushType.SOFT_PENCIL -> 0.40f
-            BrushType.MARKER -> 0.50f
-            BrushType.HARD_PENCIL -> 0.65f
-            BrushType.PEN -> 0.72f
-            BrushType.ERASER_SOFT -> 0.45f
-            BrushType.ERASER_HARD -> 0.85f
-            else -> 0.60f
-        }
-        // Light pressure = Thin minimum. Max pressure = baseWidth (never exceeds wheel max size)
-        return baseW * (minRatio + (1.0f - minRatio) * p)
-    }
-
-    private fun computeDynamicAlpha(brush: BrushType, baseA: Int, rawP: Float): Int {
-        if (brush.isUtility || brush == BrushType.WIRE) return baseA
-        val minAlphaRatio = when (brush) {
-            BrushType.SOFT_PENCIL -> 0.35f
-            BrushType.WATERCOLOR -> 0.40f
-            BrushType.AIRBRUSH -> 0.25f
-            BrushType.FOUNTAIN_PEN -> 0.55f
-            BrushType.MARKER -> 0.55f
-            else -> 0.85f
-        }
-        val p = rawP.coerceIn(0.05f, 1.0f)
-        return (baseA * (minAlphaRatio + (1.0f - minAlphaRatio) * p)).toInt().coerceIn(0, 255)
-    }
-
     private fun renderStroke(canvas: Canvas, stroke: VectorStroke, layerOpacity: Float) {
-        if (stroke.points.isEmpty()) return
+        if (stroke.points.size < 2) return
 
         val alpha = ((Color.alpha(stroke.color) / 255f) * stroke.opacity * layerOpacity * 255f).toInt()
         strokePaint.color = stroke.color
         strokePaint.alpha = alpha
+        strokePaint.strokeWidth = stroke.baseWidth
 
-        if (stroke.brushType == BrushType.WIRE) {
-            strokePaint.strokeCap = Paint.Cap.BUTT
-            strokePaint.strokeWidth = stroke.baseWidth
-            if (stroke.points.size < 2) return
-            val path = Path()
-            path.moveTo(stroke.points[0].x, stroke.points[0].y)
-            for (i in 1 until stroke.points.size) {
-                val p0 = stroke.points[i - 1]
-                val p1 = stroke.points[i]
-                val midX = (p0.x + p1.x) / 2f
-                val midY = (p0.y + p1.y) / 2f
-                path.quadTo(p0.x, p0.y, midX, midY)
+        when (stroke.brushType) {
+            BrushType.WIRE -> {
+                strokePaint.strokeCap = Paint.Cap.BUTT
             }
-            path.lineTo(stroke.points.last().x, stroke.points.last().y)
-            canvas.drawPath(path, strokePaint)
-            return
+            BrushType.MARKER -> {
+                strokePaint.strokeCap = Paint.Cap.SQUARE
+                strokePaint.alpha = (alpha * 0.45f).toInt()
+            }
+            BrushType.WATERCOLOR -> {
+                strokePaint.strokeCap = Paint.Cap.ROUND
+                strokePaint.alpha = (alpha * 0.35f).toInt()
+            }
+            BrushType.AIRBRUSH -> {
+                strokePaint.strokeCap = Paint.Cap.ROUND
+                strokePaint.alpha = (alpha * 0.25f).toInt()
+            }
+            BrushType.SOFT_PENCIL, BrushType.ERASER_SOFT -> {
+                strokePaint.strokeCap = Paint.Cap.ROUND
+                strokePaint.alpha = (alpha * 0.75f).toInt()
+            }
+            else -> {
+                strokePaint.strokeCap = Paint.Cap.ROUND
+            }
         }
 
-        // Concepts S Pen Hardware Dynamic Pressure Mapping for committed strokes
-        strokePaint.strokeCap = if (stroke.brushType == BrushType.MARKER) Paint.Cap.SQUARE else Paint.Cap.ROUND
-        strokePaint.strokeJoin = Paint.Join.ROUND
-
-        if (stroke.points.size == 1) {
-            val p = stroke.points[0]
-            val dynW = computeDynamicWidth(stroke.brushType, stroke.baseWidth, p.pressure, pressureCurve)
-            val dynA = computeDynamicAlpha(stroke.brushType, alpha, p.pressure)
-            strokePaint.strokeWidth = dynW
-            strokePaint.alpha = dynA
-            canvas.drawCircle(p.x, p.y, dynW / 2f, strokePaint)
-            return
-        }
+        val path = Path()
+        path.moveTo(stroke.points[0].x, stroke.points[0].y)
 
         for (i in 1 until stroke.points.size) {
             val p0 = stroke.points[i - 1]
             val p1 = stroke.points[i]
-            val segPress = ((p0.pressure + p1.pressure) / 2f).coerceIn(0.01f, 1.0f)
-            val dynW = computeDynamicWidth(stroke.brushType, stroke.baseWidth, segPress, pressureCurve)
-            val dynA = computeDynamicAlpha(stroke.brushType, alpha, segPress)
-            strokePaint.strokeWidth = dynW
-            strokePaint.alpha = dynA
-            canvas.drawLine(p0.x, p0.y, p1.x, p1.y, strokePaint)
+            val midX = (p0.x + p1.x) / 2f
+            val midY = (p0.y + p1.y) / 2f
+            path.quadTo(p0.x, p0.y, midX, midY)
         }
+        val last = stroke.points.last()
+        path.lineTo(last.x, last.y)
+
+        canvas.drawPath(path, strokePaint)
     }
 
     private fun renderGrid(canvas: Canvas, vp: ViewportState, w: Float, h: Float) {
@@ -763,10 +697,8 @@ fun CanvasView(
     isCurrentLasso: Boolean,
     activeColor: Int,
     activeWidth: Float,
-    activeOpacity: Float = 1.0f,
     activeBrush: BrushType,
     fingerMode: FingerMode,
-    pressureCurve: Float = 0.5f,
     onPenStart: (RawPoint, Boolean, Float, Float) -> Unit,
     onPenMove: (List<RawPoint>, Boolean, Float, Float) -> Unit,
     onPenEnd: (RawPoint, Boolean, Float, Float) -> Unit,
@@ -797,11 +729,9 @@ fun CanvasView(
                     this.isCurrentLasso = isCurrentLasso
                     this.activeColor = activeColor
                     this.activeWidth = activeWidth
-                    this.activeOpacity = activeOpacity
                     this.activeBrush = activeBrush
                     this.fingerMode = fingerMode
-                    this.pressureCurve = pressureCurve
- 
+
                     this.onPenStart = onPenStart
                     this.onPenMove = onPenMove
                     this.onPenEnd = onPenEnd
@@ -829,10 +759,8 @@ fun CanvasView(
                 view.isCurrentLasso = isCurrentLasso
                 view.activeColor = activeColor
                 view.activeWidth = activeWidth
-                view.activeOpacity = activeOpacity
                 view.activeBrush = activeBrush
                 view.fingerMode = fingerMode
-                view.pressureCurve = pressureCurve
 
                 view.onPenStart = onPenStart
                 view.onPenMove = onPenMove

@@ -1,0 +1,8 @@
+{
+  "name": "Concepts Sketch",
+  "description": "Infinite vector sketching app for Samsung Galaxy Tablets with S Pen support, Concepts tool wheel, layers, and gestures.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

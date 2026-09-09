@@ -1,3 +1,4 @@
+/* 
 package com.example.ui
 
 import androidx.compose.animation.AnimatedVisibility
@@ -613,3 +614,5 @@ fun getBrushIcon(type: BrushType): ImageVector {
         BrushType.LASSO -> Icons.Default.CropFree
     }
 }
+
+*/

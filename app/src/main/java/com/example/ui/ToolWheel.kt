@@ -638,4 +638,3 @@ private fun getBrushIcon(brushType: BrushType): ImageVector {
         BrushType.SLICE -> Icons.Default.ContentCut
     }
 }
-

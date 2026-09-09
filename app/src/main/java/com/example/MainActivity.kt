@@ -288,26 +288,7 @@ fun ConceptsSketchApp(
                     .statusBarsPadding()
             )
 
-            // 3. Floating Concepts Tool Wheel (Draggable 3-Ring Wheel)
-            ToolWheel(
-                toolSlots = toolSlots,
-                activeSlotIndex = activeSlotIndex,
-                activeColor = activeColor,
-                activeBrush = activeBrush,
-                activeSize = activeSize,
-                activeOpacity = activeOpacity,
-                activeSmoothing = activeSmoothing,
-                onSelectSlot = { viewModel.selectToolSlot(it) },
-                onChangeBrushType = { viewModel.setActiveBrush(it) },
-                onOpenColorWheel = { isColorWheelOpen = true },
-                onSelectColor = { viewModel.setActiveColor(it) },
-                onSizeChange = { viewModel.setActiveStrokeWidth(it) },
-                onOpacityChange = { viewModel.setActiveOpacity(it) },
-                onSmoothingChange = { viewModel.setActiveSmoothing(it) },
-                onUndo = { viewModel.undo() },
-                onRedo = { viewModel.redo() },
-                modifier = Modifier.align(Alignment.TopStart)
-            )
+            
 
             // 4. Floating HUD Selection Toolbar (Copy, Delete, Mirror Left, Mirror Top)
             FloatingSelectionBar(

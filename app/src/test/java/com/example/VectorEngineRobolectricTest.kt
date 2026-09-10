@@ -5,6 +5,7 @@ import com.example.model.BrushType
 import com.example.model.RawPoint
 import com.example.model.VectorStroke
 import com.example.viewmodel.CanvasViewModel
+import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -95,7 +96,7 @@ class VectorEngineRobolectricTest {
 
     @Test
     fun `test canvas viewmodel selection copy and delete operations`() {
-        val vm = CanvasViewModel()
+        val vm = CanvasViewModel(Dispatchers.Unconfined)
 
         // Draw a test stroke
         vm.startInking(RawPoint(10f, 10f), isButtonPressed = false, 1000f, 1000f)
@@ -131,5 +132,100 @@ class VectorEngineRobolectricTest {
         vm.deleteSelection()
         assertEquals(1, vm.strokes.value.size)
         assertTrue(vm.selection.value.isEmpty)
+    }
+
+    @Test
+    fun `test true vector data structure computes bezier curve segments`() {
+        val points = listOf(
+            RawPoint(0f, 0f, 0.5f),
+            RawPoint(50f, 25f, 0.8f),
+            RawPoint(100f, 100f, 1.0f)
+        )
+        val stroke = VectorStroke(
+            id = "vector_test",
+            layerId = "layer1",
+            brushType = BrushType.PEN,
+            color = 0xFF0000,
+            baseWidth = 4f,
+            points = points
+        )
+
+        assertTrue("True vector stroke must compute Bezier curve segments", stroke.bezierSegments.isNotEmpty())
+        val firstSeg = stroke.bezierSegments.first()
+        assertEquals(0f, firstSeg.startX, 0.01f)
+        assertEquals(0f, firstSeg.startY, 0.01f)
+        assertEquals(0f, firstSeg.cp1X, 0.01f)
+        assertEquals(0f, firstSeg.cp1Y, 0.01f)
+        assertEquals(25f, firstSeg.endX, 0.01f)
+        assertEquals(12.5f, firstSeg.endY, 0.01f)
+        assertTrue(firstSeg.startWidth > 0f)
+        assertTrue(firstSeg.endWidth > 0f)
+    }
+
+    @Test
+    fun `test smart clipboard ignores invisible micro-dots and preserves center of mass`() {
+        val normalStroke = VectorStroke(
+            id = "normal_stroke",
+            layerId = "layer1",
+            brushType = BrushType.PEN,
+            color = 0,
+            baseWidth = 2f,
+            points = listOf(RawPoint(100f, 100f), RawPoint(200f, 200f))
+        )
+        val microDot = VectorStroke(
+            id = "micro_dot",
+            layerId = "layer1",
+            brushType = BrushType.PEN,
+            color = 0,
+            baseWidth = 1f,
+            points = listOf(RawPoint(0.1f, 0.1f))
+        )
+
+        assertTrue(GeometryMath.isMicroDot(microDot))
+        assertFalse(GeometryMath.isMicroDot(normalStroke))
+
+        // Bounding box without micro-dots should center strictly around normal stroke
+        val boundsFiltered = GeometryMath.computeSelectionBounds(
+            listOf(normalStroke, microDot),
+            emptyList(),
+            ignoreMicroDots = true
+        )
+        assertNotNull(boundsFiltered)
+        assertEquals(150f, boundsFiltered!!.centerX(), 2.0f)
+        assertEquals(150f, boundsFiltered.centerY(), 2.0f)
+
+        // Test centered pasteAt
+        val vm = CanvasViewModel(Dispatchers.Unconfined)
+        vm.pasteAt(500f, 500f) // empty clipboard does nothing safely
+    }
+
+    @Test
+    fun `test layer locking prevents edits and deletions on locked layers`() {
+        val vm = CanvasViewModel(Dispatchers.Unconfined)
+        val defaultLayerId = vm.layers.value.first().id
+
+        // Create stroke on default layer
+        vm.startInking(RawPoint(50f, 50f), false, 1000f, 1000f)
+        vm.appendInkingPoints(listOf(RawPoint(60f, 60f)), false, 1000f, 1000f)
+        vm.finishInking(RawPoint(60f, 60f), false, 1000f, 1000f)
+        assertEquals(1, vm.strokes.value.size)
+
+        // Lock the layer
+        vm.toggleLayerLock(defaultLayerId)
+        assertTrue(vm.layers.value.first { it.id == defaultLayerId }.isLocked)
+
+        // Attempt to inking on locked layer -> must be rejected
+        vm.startInking(RawPoint(10f, 10f), false, 1000f, 1000f)
+        vm.finishInking(RawPoint(20f, 20f), false, 1000f, 1000f)
+        assertEquals("Locked layer must reject new strokes", 1, vm.strokes.value.size)
+
+        // Attempt lasso selection on locked layer -> must be excluded
+        vm.startInking(RawPoint(0f, 0f), true, 1000f, 1000f)
+        vm.appendInkingPoints(
+            listOf(RawPoint(100f, 0f), RawPoint(100f, 100f), RawPoint(0f, 100f), RawPoint(0f, 0f)),
+            true, 1000f, 1000f
+        )
+        vm.finishInking(RawPoint(0f, 0f), true, 1000f, 1000f)
+        assertTrue("Locked layer elements cannot be selected", vm.selection.value.isEmpty)
     }
 }

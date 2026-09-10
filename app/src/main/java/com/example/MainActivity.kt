@@ -21,6 +21,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -74,6 +75,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.ConceptFileManager
 import com.example.data.DrawingRepository
 import com.example.data.UserSettingsManager
+import com.example.engine.GeometryMath
 import com.example.engine.VectorExporter
 import com.example.model.BrushType
 import com.example.ui.BlueprintDialog
@@ -248,11 +250,14 @@ fun ConceptsSketchApp(
     Scaffold(
         modifier = Modifier.fillMaxSize()
     ) { innerPadding ->
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+            val canvasW = constraints.maxWidth.toFloat()
+            val canvasH = constraints.maxHeight.toFloat()
+
             // 1. Infinite Vector Canvas Surface
             CanvasView(
                 layers = layers,
@@ -419,7 +424,14 @@ fun ConceptsSketchApp(
             QuickActionMenu(
                 anchorPoint = quickMenuPoint,
                 onPaste = {
-                    viewModel.copySelection()
+                    val anchor = quickMenuPoint
+                    if (anchor != null) {
+                        val worldPt = GeometryMath.screenToWorld(anchor.x, anchor.y, viewport, canvasW, canvasH)
+                        viewModel.pasteAt(worldPt.x, worldPt.y)
+                    } else {
+                        viewModel.pasteFromClipboard()
+                    }
+                    viewModel.dismissQuickMenu()
                     Toast.makeText(context, "Pasted at stylus position", Toast.LENGTH_SHORT).show()
                 },
                 onImportImage = {

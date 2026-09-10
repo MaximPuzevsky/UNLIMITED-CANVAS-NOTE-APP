@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.graphics.PointF
 import android.graphics.RectF
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.example.data.ConceptFileManager
 import com.example.data.ConceptFilePayload
 import com.example.data.DrawingRepository
@@ -22,9 +23,13 @@ import com.example.model.SelectionState
 import com.example.model.ToolSlot
 import com.example.model.VectorStroke
 import com.example.model.ViewportState
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.UUID
 import kotlin.math.cos
 import kotlin.math.sin
@@ -36,7 +41,9 @@ data class CanvasSnapshot(
     val layers: List<CanvasLayer>
 )
 
-class CanvasViewModel : ViewModel() {
+class CanvasViewModel(
+    private val calculationDispatcher: CoroutineDispatcher = Dispatchers.Default
+) : ViewModel() {
 
     private var repository: DrawingRepository? = null
     private var userSettings: UserSettingsManager? = null
@@ -153,6 +160,7 @@ class CanvasViewModel : ViewModel() {
     // S Pen / Touch current inking path
     private val _currentStrokePoints = MutableStateFlow<List<RawPoint>>(emptyList())
     val currentStrokePoints: StateFlow<List<RawPoint>> = _currentStrokePoints.asStateFlow()
+    private val inFlightStrokePoints = mutableListOf<RawPoint>()
 
     private val _isCurrentStrokeLasso = MutableStateFlow(false)
     val isCurrentStrokeLasso: StateFlow<Boolean> = _isCurrentStrokeLasso.asStateFlow()
@@ -161,9 +169,10 @@ class CanvasViewModel : ViewModel() {
     private val _quickMenuPoint = MutableStateFlow<PointF?>(null)
     val quickMenuPoint: StateFlow<PointF?> = _quickMenuPoint.asStateFlow()
 
-    // Clipboard for copy-paste
+    // Clipboard for copy-paste (supports smart filtering of micro-dots and centered pasting)
     private var clipboardStrokes: List<VectorStroke> = emptyList()
     private var clipboardImages: List<CanvasImageElement> = emptyList()
+    private var clipboardTextBlocks: List<CanvasTextBlock> = emptyList()
 
     // Undo / Redo history
     private val undoStack = mutableListOf<CanvasSnapshot>()
@@ -207,20 +216,9 @@ class CanvasViewModel : ViewModel() {
         val newZoom = (current.zoom * scaleFactor).coerceIn(0.05f, 50.0f)
         var newRot = current.rotationDeg + rotateDeltaDeg
 
-        // Normalize rotation
+        // Normalize rotation smoothly without jitter or snapping
         while (newRot > 180f) newRot -= 360f
         while (newRot < -180f) newRot += 360f
-
-        // Angle snapping near 0, 45, 90, 180
-        if (current.angleSnapping) {
-            val snapAngles = listOf(0f, 45f, -45f, 90f, -90f, 180f, -180f)
-            for (target in snapAngles) {
-                if (Math.abs(newRot - target) < 2.5f) {
-                    newRot = target
-                    break
-                }
-            }
-        }
 
         // Rotate pan delta relative to canvas angle so pan feels natural
         val rad = -Math.toRadians(current.rotationDeg.toDouble()).toFloat()
@@ -305,7 +303,8 @@ class CanvasViewModel : ViewModel() {
 
         val worldPt = GeometryMath.screenToWorld(screenPoint.x, screenPoint.y, _viewport.value, viewW, viewH)
         val initialPoint = screenPoint.copy(x = worldPt.x, y = worldPt.y)
-        _currentStrokePoints.value = listOf(initialPoint)
+        inFlightStrokePoints.clear()
+        inFlightStrokePoints.add(initialPoint)
 
         if (isLasso) {
             _selection.value = _selection.value.copy(
@@ -322,11 +321,10 @@ class CanvasViewModel : ViewModel() {
             p.copy(x = w.x, y = w.y)
         }
 
-        val updated = _currentStrokePoints.value + worldPoints
-        _currentStrokePoints.value = updated
+        inFlightStrokePoints.addAll(worldPoints)
 
         if (isLasso) {
-            _selection.value = _selection.value.copy(lassoPoints = updated)
+            _selection.value = _selection.value.copy(lassoPoints = inFlightStrokePoints.toList())
         }
     }
 
@@ -334,12 +332,16 @@ class CanvasViewModel : ViewModel() {
         val isLasso = isButtonPressed || _activeBrushType.value == BrushType.LASSO || _isCurrentStrokeLasso.value
         val worldPt = GeometryMath.screenToWorld(screenPoint.x, screenPoint.y, _viewport.value, viewW, viewH)
         val endPoint = screenPoint.copy(x = worldPt.x, y = worldPt.y)
-        var rawPoints = _currentStrokePoints.value
-        if (rawPoints.isEmpty()) {
-            rawPoints = listOf(endPoint)
-        } else if (rawPoints.last().x != endPoint.x || rawPoints.last().y != endPoint.y) {
-            rawPoints = rawPoints + endPoint
+
+        if (inFlightStrokePoints.isEmpty()) {
+            inFlightStrokePoints.add(endPoint)
+        } else if (inFlightStrokePoints.last().x != endPoint.x || inFlightStrokePoints.last().y != endPoint.y) {
+            inFlightStrokePoints.add(endPoint)
         }
+
+        val rawPoints = inFlightStrokePoints.toList()
+        inFlightStrokePoints.clear()
+        _currentStrokePoints.value = emptyList()
 
         if (rawPoints.isNotEmpty()) {
             val effectivePoints = if (rawPoints.size == 1) {
@@ -350,14 +352,15 @@ class CanvasViewModel : ViewModel() {
 
             if (isLasso) {
                 if (effectivePoints.size >= 2) {
-                    executeLassoSelection(effectivePoints)
+                    viewModelScope.launch(calculationDispatcher) {
+                        executeLassoSelection(effectivePoints)
+                    }
                 }
             } else {
                 handleCompletedToolStroke(effectivePoints)
             }
         }
 
-        _currentStrokePoints.value = emptyList()
         _isCurrentStrokeLasso.value = false
     }
 
@@ -370,88 +373,120 @@ class CanvasViewModel : ViewModel() {
 
         when (activeBrush) {
             BrushType.SLICE -> {
-                // Slice existing strokes that cross rawPoints
-                pushUndoSnapshot()
-                val currentStrokes = _strokes.value
-                val newStrokeList = mutableListOf<VectorStroke>()
-                var modified = false
+                // Slice existing strokes that cross rawPoints with spatial bounds culling on background coroutine
+                viewModelScope.launch(calculationDispatcher) {
+                    pushUndoSnapshot()
+                    val currentStrokes = _strokes.value
+                    val layerId = _activeLayerId.value
+                    val toolBounds = GeometryMath.computePointsBounds(rawPoints)
+                    toolBounds.inset(-15f, -15f)
+                    val newStrokeList = mutableListOf<VectorStroke>()
+                    var modified = false
 
-                for (s in currentStrokes) {
-                    if (s.layerId == _activeLayerId.value && !s.isDeleted) {
-                        val sliced = GeometryMath.sliceStroke(s, rawPoints)
-                        if (sliced.size > 1) {
-                            modified = true
-                            newStrokeList.addAll(sliced)
+                    for (s in currentStrokes) {
+                        if (s.layerId == layerId && !s.isDeleted && RectF.intersects(s.bounds, toolBounds)) {
+                            val sliced = GeometryMath.sliceStroke(s, rawPoints)
+                            if (sliced.size > 1) {
+                                modified = true
+                                newStrokeList.addAll(sliced)
+                            } else {
+                                newStrokeList.add(s)
+                            }
                         } else {
                             newStrokeList.add(s)
                         }
-                    } else {
-                        newStrokeList.add(s)
                     }
-                }
-                if (modified) {
-                    _strokes.value = newStrokeList
+                    if (modified) {
+                        _strokes.value = newStrokeList
+                        scheduleAutoSave()
+                    }
                 }
             }
 
             BrushType.NUDGE -> {
-                // Nudge stroke vertices along drag path
+                // Nudge stroke vertices along drag path with spatial bounds culling on background coroutine
                 if (rawPoints.size >= 2) {
-                    pushUndoSnapshot()
-                    val pStart = rawPoints.first()
-                    val pEnd = rawPoints.last()
-                    val dx = pEnd.x - pStart.x
-                    val dy = pEnd.y - pStart.y
-                    val radius = _activeStrokeWidth.value * 5f
-
-                    _strokes.value = _strokes.value.map { s ->
-                        if (s.layerId == _activeLayerId.value && !s.isDeleted) {
-                            GeometryMath.nudgeStroke(s, pStart.x, pStart.y, radius, dx, dy)
-                        } else s
+                    viewModelScope.launch(calculationDispatcher) {
+                        pushUndoSnapshot()
+                        val pStart = rawPoints.first()
+                        val pEnd = rawPoints.last()
+                        val dx = pEnd.x - pStart.x
+                        val dy = pEnd.y - pStart.y
+                        val radius = _activeStrokeWidth.value * 5f
+                        val currentStrokes = _strokes.value
+                        val layerId = _activeLayerId.value
+                        val toolBounds = RectF(pStart.x - radius, pStart.y - radius, pStart.x + radius, pStart.y + radius)
+                        val updated = currentStrokes.map { s ->
+                            if (s.layerId == layerId && !s.isDeleted && RectF.intersects(s.bounds, toolBounds)) {
+                                GeometryMath.nudgeStroke(s, pStart.x, pStart.y, radius, dx, dy)
+                            } else s
+                        }
+                        _strokes.value = updated
+                        scheduleAutoSave()
                     }
                 }
             }
 
             BrushType.ERASER_HARD -> {
-                // Hard vector eraser: removes strokes on contact
-                pushUndoSnapshot()
-                val eraserRadius = _activeStrokeWidth.value
-                _strokes.value = _strokes.value.filter { s ->
-                    if (s.layerId != _activeLayerId.value) return@filter true
-                    // Keep strokes that don't collide
-                    var collides = false
-                    for (ep in rawPoints) {
-                        for (sp in s.points) {
-                            val dist = Math.hypot((ep.x - sp.x).toDouble(), (ep.y - sp.y).toDouble()).toFloat()
-                            if (dist < eraserRadius) {
-                                collides = true
-                                break
+                // Hard vector eraser: removes strokes on contact with spatial bounds culling
+                viewModelScope.launch(calculationDispatcher) {
+                    pushUndoSnapshot()
+                    val eraserRadius = _activeStrokeWidth.value
+                    val currentStrokes = _strokes.value
+                    val layerId = _activeLayerId.value
+                    val toolBounds = GeometryMath.computePointsBounds(rawPoints)
+                    toolBounds.inset(-eraserRadius, -eraserRadius)
+
+                    val filtered = currentStrokes.filter { s ->
+                        if (s.layerId != layerId || s.isDeleted) return@filter true
+                        if (!RectF.intersects(s.bounds, toolBounds)) return@filter true
+                        // Detailed point-level collision check only for spatially candidate strokes
+                        var collides = false
+                        for (ep in rawPoints) {
+                            for (sp in s.points) {
+                                val dist = Math.hypot((ep.x - sp.x).toDouble(), (ep.y - sp.y).toDouble()).toFloat()
+                                if (dist < eraserRadius) {
+                                    collides = true
+                                    break
+                                }
                             }
+                            if (collides) break
                         }
-                        if (collides) break
+                        !collides
                     }
-                    !collides
+                    _strokes.value = filtered
+                    scheduleAutoSave()
                 }
             }
 
             BrushType.ERASER_MASK -> {
-                // Mask eraser marks strokes as masked
-                pushUndoSnapshot()
-                val eraserRadius = _activeStrokeWidth.value
-                _strokes.value = _strokes.value.map { s ->
-                    if (s.layerId != _activeLayerId.value) return@map s
-                    var collides = false
-                    for (ep in rawPoints) {
-                        for (sp in s.points) {
-                            val dist = Math.hypot((ep.x - sp.x).toDouble(), (ep.y - sp.y).toDouble()).toFloat()
-                            if (dist < eraserRadius) {
-                                collides = true
-                                break
+                // Mask eraser marks strokes as masked with spatial bounds culling
+                viewModelScope.launch(calculationDispatcher) {
+                    pushUndoSnapshot()
+                    val eraserRadius = _activeStrokeWidth.value
+                    val currentStrokes = _strokes.value
+                    val layerId = _activeLayerId.value
+                    val toolBounds = GeometryMath.computePointsBounds(rawPoints)
+                    toolBounds.inset(-eraserRadius, -eraserRadius)
+
+                    val updated = currentStrokes.map { s ->
+                        if (s.layerId != layerId || s.isDeleted) return@map s
+                        if (!RectF.intersects(s.bounds, toolBounds)) return@map s
+                        var collides = false
+                        for (ep in rawPoints) {
+                            for (sp in s.points) {
+                                val dist = Math.hypot((ep.x - sp.x).toDouble(), (ep.y - sp.y).toDouble()).toFloat()
+                                if (dist < eraserRadius) {
+                                    collides = true
+                                    break
+                                }
                             }
+                            if (collides) break
                         }
-                        if (collides) break
+                        if (collides) s.copy(isMasked = true) else s
                     }
-                    if (collides) s.copy(isMasked = true) else s
+                    _strokes.value = updated
+                    scheduleAutoSave()
                 }
             }
 
@@ -470,37 +505,39 @@ class CanvasViewModel : ViewModel() {
                     points = smoothedPoints
                 )
                 _strokes.value = _strokes.value + newStroke
+                scheduleAutoSave()
             }
         }
-        scheduleAutoSave()
     }
 
     private fun executeLassoSelection(lassoPoints: List<RawPoint>) {
+        val unlockedLayerIds = _layers.value.filter { it.isVisible && !it.isLocked }.map { it.id }.toSet()
+        val allStrokes = _strokes.value
+        val allImages = _images.value
+
         val selectedStrokes = mutableSetOf<String>()
         val selectedImages = mutableSetOf<String>()
+        val lassoBounds = GeometryMath.computePointsBounds(lassoPoints)
 
-        // Check all strokes across visible and unlocked layers
-        val unlockedLayerIds = _layers.value.filter { it.isVisible && !it.isLocked }.map { it.id }.toSet()
-
-        for (s in _strokes.value) {
+        for (s in allStrokes) {
             if (s.layerId in unlockedLayerIds && !s.isDeleted) {
-                if (GeometryMath.isStrokeSelectedByLasso(s, lassoPoints)) {
+                if (RectF.intersects(s.bounds, lassoBounds) && GeometryMath.isStrokeSelectedByLasso(s, lassoPoints)) {
                     selectedStrokes.add(s.id)
                 }
             }
         }
 
-        for (img in _images.value) {
+        for (img in allImages) {
             if (img.layerId in unlockedLayerIds) {
-                if (GeometryMath.isImageSelectedByLasso(img, lassoPoints)) {
+                if (RectF.intersects(img.bounds, lassoBounds) && GeometryMath.isImageSelectedByLasso(img, lassoPoints)) {
                     selectedImages.add(img.id)
                 }
             }
         }
 
-        val strokesSubset = _strokes.value.filter { it.id in selectedStrokes }
-        val imagesSubset = _images.value.filter { it.id in selectedImages }
-        val bounds = GeometryMath.computeSelectionBounds(strokesSubset, imagesSubset)
+        val strokesSubset = allStrokes.filter { it.id in selectedStrokes }
+        val imagesSubset = allImages.filter { it.id in selectedImages }
+        val bounds = GeometryMath.computeSelectionBounds(strokesSubset, imagesSubset, ignoreMicroDots = true)
 
         _selection.value = SelectionState(
             selectedStrokeIds = selectedStrokes,
@@ -649,24 +686,52 @@ class CanvasViewModel : ViewModel() {
         scheduleAutoSave()
     }
 
-    // Selection actions (Minimal floating toolbar parity)
+    // Selection actions (Minimal floating toolbar parity & Concepts-grade Smart Clipboard)
     fun copySelection() {
         val sel = _selection.value
         if (sel.isEmpty) return
 
-        pushUndoSnapshot()
+        val unlockedLayerIds = _layers.value.filter { !it.isLocked }.map { it.id }.toSet()
 
-        // Clone selected strokes with offset
-        val offset = 40f
+        // Smart Clipboard: Ignore invisible micro-dots to ensure pure center-of-mass alignment
+        val validStrokes = _strokes.value.filter {
+            it.id in sel.selectedStrokeIds && it.layerId in unlockedLayerIds && !GeometryMath.isMicroDot(it)
+        }
+        val validImages = _images.value.filter {
+            it.id in sel.selectedImageIds && it.layerId in unlockedLayerIds
+        }
+        val validText = _textBlocks.value.filter {
+            it.id in sel.selectedTextIds && it.layerId in unlockedLayerIds
+        }
+
+        if (validStrokes.isEmpty() && validImages.isEmpty() && validText.isEmpty()) return
+
+        clipboardStrokes = validStrokes
+        clipboardImages = validImages
+        clipboardTextBlocks = validText
+
+        // Immediate in-place duplicate with offset for instant visual feedback
+        duplicateSelection()
+    }
+
+    fun duplicateSelection(offset: Float = 40f) {
+        val sel = _selection.value
+        if (sel.isEmpty) return
+
+        pushUndoSnapshot()
+        val unlockedLayerIds = _layers.value.filter { !it.isLocked }.map { it.id }.toSet()
+        val targetLayerId = _activeLayerId.value
+
         val clonedStrokes = mutableListOf<VectorStroke>()
         val clonedStrokeIds = mutableSetOf<String>()
 
         for (s in _strokes.value) {
-            if (s.id in sel.selectedStrokeIds) {
+            if (s.id in sel.selectedStrokeIds && s.layerId in unlockedLayerIds && !GeometryMath.isMicroDot(s)) {
                 val newId = UUID.randomUUID().toString()
                 val movedPoints = s.points.map { p -> p.copy(x = p.x + offset, y = p.y + offset) }
                 val clone = s.copy(
                     id = newId,
+                    layerId = targetLayerId,
                     points = movedPoints,
                     bounds = VectorStroke.calculateBounds(movedPoints)
                 )
@@ -675,15 +740,15 @@ class CanvasViewModel : ViewModel() {
             }
         }
 
-        // Clone selected images with offset
         val clonedImages = mutableListOf<CanvasImageElement>()
         val clonedImageIds = mutableSetOf<String>()
 
         for (img in _images.value) {
-            if (img.id in sel.selectedImageIds) {
+            if (img.id in sel.selectedImageIds && img.layerId in unlockedLayerIds) {
                 val newId = UUID.randomUUID().toString()
                 val clone = img.copy(
                     id = newId,
+                    layerId = targetLayerId,
                     worldX = img.worldX + offset,
                     worldY = img.worldY + offset
                 )
@@ -692,27 +757,155 @@ class CanvasViewModel : ViewModel() {
             }
         }
 
+        val clonedText = mutableListOf<CanvasTextBlock>()
+        val clonedTextIds = mutableSetOf<String>()
+
+        for (tb in _textBlocks.value) {
+            if (tb.id in sel.selectedTextIds && tb.layerId in unlockedLayerIds) {
+                val newId = UUID.randomUUID().toString()
+                val clone = tb.copy(
+                    id = newId,
+                    layerId = targetLayerId,
+                    worldX = tb.worldX + offset,
+                    worldY = tb.worldY + offset
+                )
+                clonedText.add(clone)
+                clonedTextIds.add(newId)
+            }
+        }
+
         _strokes.value = _strokes.value + clonedStrokes
         _images.value = _images.value + clonedImages
+        _textBlocks.value = _textBlocks.value + clonedText
 
-        val newBounds = GeometryMath.computeSelectionBounds(clonedStrokes, clonedImages)
+        val newBounds = GeometryMath.computeSelectionBounds(clonedStrokes, clonedImages, clonedText, ignoreMicroDots = true)
         _selection.value = SelectionState(
             selectedStrokeIds = clonedStrokeIds,
             selectedImageIds = clonedImageIds,
+            selectedTextIds = clonedTextIds,
             bounds = newBounds,
             isCopyPending = true
         )
         scheduleAutoSave()
     }
 
+    /**
+     * Pastes clipboard or selection elements centered precisely at [targetWorldX, targetWorldY]
+     * (e.g. S Pen dwell anchor point or camera viewport center).
+     * Prevents pasted elements from flying off-screen or shifting center-of-mass due to micro-dots.
+     */
+    fun pasteAt(targetWorldX: Float, targetWorldY: Float) {
+        val sourceStrokes = if (clipboardStrokes.isNotEmpty()) {
+            clipboardStrokes
+        } else {
+            val sel = _selection.value
+            _strokes.value.filter { it.id in sel.selectedStrokeIds && !GeometryMath.isMicroDot(it) }
+        }
+
+        val sourceImages = if (clipboardImages.isNotEmpty()) {
+            clipboardImages
+        } else {
+            val sel = _selection.value
+            _images.value.filter { it.id in sel.selectedImageIds }
+        }
+
+        val sourceText = if (clipboardTextBlocks.isNotEmpty()) {
+            clipboardTextBlocks
+        } else {
+            val sel = _selection.value
+            _textBlocks.value.filter { it.id in sel.selectedTextIds }
+        }
+
+        if (sourceStrokes.isEmpty() && sourceImages.isEmpty() && sourceText.isEmpty()) return
+
+        pushUndoSnapshot()
+
+        val sourceBounds = GeometryMath.computeSelectionBounds(sourceStrokes, sourceImages, sourceText, ignoreMicroDots = true)
+            ?: return
+
+        val sourceCenterX = sourceBounds.centerX()
+        val sourceCenterY = sourceBounds.centerY()
+        val dx = targetWorldX - sourceCenterX
+        val dy = targetWorldY - sourceCenterY
+
+        val targetLayerId = _activeLayerId.value
+        val pastedStrokes = mutableListOf<VectorStroke>()
+        val pastedStrokeIds = mutableSetOf<String>()
+
+        for (s in sourceStrokes) {
+            val newId = UUID.randomUUID().toString()
+            val movedPoints = s.points.map { p -> p.copy(x = p.x + dx, y = p.y + dy) }
+            val clone = s.copy(
+                id = newId,
+                layerId = targetLayerId,
+                points = movedPoints,
+                bounds = VectorStroke.calculateBounds(movedPoints)
+            )
+            pastedStrokes.add(clone)
+            pastedStrokeIds.add(newId)
+        }
+
+        val pastedImages = mutableListOf<CanvasImageElement>()
+        val pastedImageIds = mutableSetOf<String>()
+
+        for (img in sourceImages) {
+            val newId = UUID.randomUUID().toString()
+            val clone = img.copy(
+                id = newId,
+                layerId = targetLayerId,
+                worldX = img.worldX + dx,
+                worldY = img.worldY + dy
+            )
+            pastedImages.add(clone)
+            pastedImageIds.add(newId)
+        }
+
+        val pastedText = mutableListOf<CanvasTextBlock>()
+        val pastedTextIds = mutableSetOf<String>()
+
+        for (tb in sourceText) {
+            val newId = UUID.randomUUID().toString()
+            val clone = tb.copy(
+                id = newId,
+                layerId = targetLayerId,
+                worldX = tb.worldX + dx,
+                worldY = tb.worldY + dy
+            )
+            pastedText.add(clone)
+            pastedTextIds.add(newId)
+        }
+
+        _strokes.value = _strokes.value + pastedStrokes
+        _images.value = _images.value + pastedImages
+        _textBlocks.value = _textBlocks.value + pastedText
+
+        val newBounds = GeometryMath.computeSelectionBounds(pastedStrokes, pastedImages, pastedText, ignoreMicroDots = true)
+        _selection.value = SelectionState(
+            selectedStrokeIds = pastedStrokeIds,
+            selectedImageIds = pastedImageIds,
+            selectedTextIds = pastedTextIds,
+            bounds = newBounds,
+            isCopyPending = true
+        )
+        scheduleAutoSave()
+    }
+
+    fun pasteFromClipboard() {
+        // Center paste in active viewport camera
+        val vp = _viewport.value
+        pasteAt(-vp.panX, -vp.panY)
+    }
+
     fun deleteSelection() {
         val sel = _selection.value
         if (sel.isEmpty) return
 
+        val unlockedLayerIds = _layers.value.filter { !it.isLocked }.map { it.id }.toSet()
+
         pushUndoSnapshot()
-        _strokes.value = _strokes.value.filter { it.id !in sel.selectedStrokeIds }
-        _images.value = _images.value.filter { it.id !in sel.selectedImageIds }
-        _textBlocks.value = _textBlocks.value.filter { it.id !in sel.selectedTextIds }
+        _strokes.value = _strokes.value.filter { it.id !in sel.selectedStrokeIds || it.layerId !in unlockedLayerIds }
+        _images.value = _images.value.filter { it.id !in sel.selectedImageIds || it.layerId !in unlockedLayerIds }
+        _textBlocks.value = _textBlocks.value.filter { it.id !in sel.selectedTextIds || it.layerId !in unlockedLayerIds }
         clearSelection()
         scheduleAutoSave()
     }
@@ -722,15 +915,16 @@ class CanvasViewModel : ViewModel() {
         val bounds = sel.bounds ?: return
         pushUndoSnapshot()
 
+        val unlockedLayerIds = _layers.value.filter { !it.isLocked }.map { it.id }.toSet()
         val centerX = bounds.centerX()
         _strokes.value = _strokes.value.map { s ->
-            if (s.id in sel.selectedStrokeIds) {
+            if (s.id in sel.selectedStrokeIds && s.layerId in unlockedLayerIds) {
                 GeometryMath.mirrorStrokeHorizontal(s, centerX)
             } else s
         }
 
         _images.value = _images.value.map { img ->
-            if (img.id in sel.selectedImageIds) {
+            if (img.id in sel.selectedImageIds && img.layerId in unlockedLayerIds) {
                 img.copy(
                     worldX = 2 * centerX - img.worldX,
                     scaleX = -img.scaleX,
@@ -741,7 +935,7 @@ class CanvasViewModel : ViewModel() {
 
         val strokesSubset = _strokes.value.filter { it.id in sel.selectedStrokeIds }
         val imagesSubset = _images.value.filter { it.id in sel.selectedImageIds }
-        _selection.value = sel.copy(bounds = GeometryMath.computeSelectionBounds(strokesSubset, imagesSubset))
+        _selection.value = sel.copy(bounds = GeometryMath.computeSelectionBounds(strokesSubset, imagesSubset, ignoreMicroDots = true))
         scheduleAutoSave()
     }
 
@@ -750,15 +944,16 @@ class CanvasViewModel : ViewModel() {
         val bounds = sel.bounds ?: return
         pushUndoSnapshot()
 
+        val unlockedLayerIds = _layers.value.filter { !it.isLocked }.map { it.id }.toSet()
         val centerY = bounds.centerY()
         _strokes.value = _strokes.value.map { s ->
-            if (s.id in sel.selectedStrokeIds) {
+            if (s.id in sel.selectedStrokeIds && s.layerId in unlockedLayerIds) {
                 GeometryMath.mirrorStrokeVertical(s, centerY)
             } else s
         }
 
         _images.value = _images.value.map { img ->
-            if (img.id in sel.selectedImageIds) {
+            if (img.id in sel.selectedImageIds && img.layerId in unlockedLayerIds) {
                 img.copy(
                     worldY = 2 * centerY - img.worldY,
                     scaleY = -img.scaleY,
@@ -769,7 +964,7 @@ class CanvasViewModel : ViewModel() {
 
         val strokesSubset = _strokes.value.filter { it.id in sel.selectedStrokeIds }
         val imagesSubset = _images.value.filter { it.id in sel.selectedImageIds }
-        _selection.value = sel.copy(bounds = GeometryMath.computeSelectionBounds(strokesSubset, imagesSubset))
+        _selection.value = sel.copy(bounds = GeometryMath.computeSelectionBounds(strokesSubset, imagesSubset, ignoreMicroDots = true))
         scheduleAutoSave()
     }
 
@@ -777,21 +972,23 @@ class CanvasViewModel : ViewModel() {
         val sel = _selection.value
         if (sel.isEmpty) return
 
+        val unlockedLayerIds = _layers.value.filter { !it.isLocked }.map { it.id }.toSet()
+
         _strokes.value = _strokes.value.map { s ->
-            if (s.id in sel.selectedStrokeIds) {
+            if (s.id in sel.selectedStrokeIds && s.layerId in unlockedLayerIds) {
                 val moved = s.points.map { p -> p.copy(x = p.x + dx, y = p.y + dy) }
                 s.copy(points = moved, bounds = VectorStroke.calculateBounds(moved))
             } else s
         }
 
         _images.value = _images.value.map { img ->
-            if (img.id in sel.selectedImageIds) {
+            if (img.id in sel.selectedImageIds && img.layerId in unlockedLayerIds) {
                 img.copy(worldX = img.worldX + dx, worldY = img.worldY + dy)
             } else img
         }
 
         _textBlocks.value = _textBlocks.value.map { tb ->
-            if (tb.id in sel.selectedTextIds) {
+            if (tb.id in sel.selectedTextIds && tb.layerId in unlockedLayerIds) {
                 tb.copy(worldX = tb.worldX + dx, worldY = tb.worldY + dy)
             } else tb
         }
@@ -799,7 +996,7 @@ class CanvasViewModel : ViewModel() {
         val strokesSubset = _strokes.value.filter { it.id in sel.selectedStrokeIds }
         val imagesSubset = _images.value.filter { it.id in sel.selectedImageIds }
         val textSubset = _textBlocks.value.filter { it.id in sel.selectedTextIds }
-        _selection.value = sel.copy(bounds = GeometryMath.computeSelectionBounds(strokesSubset, imagesSubset, textSubset))
+        _selection.value = sel.copy(bounds = GeometryMath.computeSelectionBounds(strokesSubset, imagesSubset, textSubset, ignoreMicroDots = true))
         scheduleAutoSave()
     }
 
@@ -816,6 +1013,8 @@ class CanvasViewModel : ViewModel() {
         val bounds = sel.bounds ?: return
         if (sel.isEmpty) return
 
+        val unlockedLayerIds = _layers.value.filter { !it.isLocked }.map { it.id }.toSet()
+
         val currentVp = _viewport.value
         val radVp = -Math.toRadians(currentVp.rotationDeg.toDouble()).toFloat()
         val cosVp = cos(radVp)
@@ -829,9 +1028,9 @@ class CanvasViewModel : ViewModel() {
         val cosR = cos(rotRad)
         val sinR = sin(rotRad)
 
-        // Transform strokes around geometric bounding center
+        // Transform strokes around geometric bounding center (strictly pure floating-point math)
         _strokes.value = _strokes.value.map { s ->
-            if (s.id in sel.selectedStrokeIds) {
+            if (s.id in sel.selectedStrokeIds && s.layerId in unlockedLayerIds) {
                 val transformedPoints = s.points.map { p ->
                     val dx = p.x - centerX
                     val dy = p.y - centerY
@@ -854,7 +1053,7 @@ class CanvasViewModel : ViewModel() {
 
         // Transform images around geometric bounding center
         _images.value = _images.value.map { img ->
-            if (img.id in sel.selectedImageIds) {
+            if (img.id in sel.selectedImageIds && img.layerId in unlockedLayerIds) {
                 val dx = img.worldX - centerX
                 val dy = img.worldY - centerY
                 val scaledDx = dx * scaleFactor
@@ -875,7 +1074,7 @@ class CanvasViewModel : ViewModel() {
         val updatedStrokes = _strokes.value.filter { it.id in sel.selectedStrokeIds }
         val updatedImages = _images.value.filter { it.id in sel.selectedImageIds }
         _selection.value = sel.copy(
-            bounds = GeometryMath.computeSelectionBounds(updatedStrokes, updatedImages)
+            bounds = GeometryMath.computeSelectionBounds(updatedStrokes, updatedImages, ignoreMicroDots = true)
         )
         scheduleAutoSave()
     }
@@ -888,9 +1087,10 @@ class CanvasViewModel : ViewModel() {
     fun modifySelectionColor(newColor: Int) {
         val sel = _selection.value
         if (sel.selectedStrokeIds.isEmpty()) return
+        val unlockedLayerIds = _layers.value.filter { !it.isLocked }.map { it.id }.toSet()
         pushUndoSnapshot()
         _strokes.value = _strokes.value.map { s ->
-            if (s.id in sel.selectedStrokeIds) s.copy(color = newColor) else s
+            if (s.id in sel.selectedStrokeIds && s.layerId in unlockedLayerIds) s.copy(color = newColor) else s
         }
         scheduleAutoSave()
     }
@@ -898,9 +1098,10 @@ class CanvasViewModel : ViewModel() {
     fun modifySelectionWidth(newWidth: Float) {
         val sel = _selection.value
         if (sel.selectedStrokeIds.isEmpty()) return
+        val unlockedLayerIds = _layers.value.filter { !it.isLocked }.map { it.id }.toSet()
         pushUndoSnapshot()
         _strokes.value = _strokes.value.map { s ->
-            if (s.id in sel.selectedStrokeIds) s.copy(baseWidth = newWidth) else s
+            if (s.id in sel.selectedStrokeIds && s.layerId in unlockedLayerIds) s.copy(baseWidth = newWidth) else s
         }
         scheduleAutoSave()
     }
@@ -908,9 +1109,10 @@ class CanvasViewModel : ViewModel() {
     fun modifySelectionBrush(newBrush: BrushType) {
         val sel = _selection.value
         if (sel.selectedStrokeIds.isEmpty()) return
+        val unlockedLayerIds = _layers.value.filter { !it.isLocked }.map { it.id }.toSet()
         pushUndoSnapshot()
         _strokes.value = _strokes.value.map { s ->
-            if (s.id in sel.selectedStrokeIds) s.copy(brushType = newBrush) else s
+            if (s.id in sel.selectedStrokeIds && s.layerId in unlockedLayerIds) s.copy(brushType = newBrush) else s
         }
         scheduleAutoSave()
     }

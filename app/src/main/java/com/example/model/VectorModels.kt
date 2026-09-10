@@ -40,7 +40,24 @@ enum class BrushType(val displayName: String, val isUtility: Boolean = false) {
 }
 
 /**
+ * Parametric Bezier curve segment representing mathematical vector spline curves.
+ * Holds control points and variable thickness parameters along the curve for infinite zooming.
+ */
+data class BezierCurveSegment(
+    val startX: Float,
+    val startY: Float,
+    val cp1X: Float,
+    val cp1Y: Float,
+    val endX: Float,
+    val endY: Float,
+    val startWidth: Float,
+    val endWidth: Float
+)
+
+/**
  * Fully parametric vector stroke stored in infinite world coordinate space.
+ * Stores mathematical curve parameters (Bezier control points, thickness, smoothing)
+ * rather than pixel raster arrays to support smooth infinite zooming.
  */
 data class VectorStroke(
     val id: String = UUID.randomUUID().toString(),
@@ -53,7 +70,8 @@ data class VectorStroke(
     val points: List<RawPoint>,
     val bounds: RectF = calculateBounds(points),
     val isDeleted: Boolean = false,
-    val isMasked: Boolean = false
+    val isMasked: Boolean = false,
+    val bezierSegments: List<BezierCurveSegment> = computeBezierSegments(points, baseWidth)
 ) {
     companion object {
         fun calculateBounds(points: List<RawPoint>): RectF {
@@ -70,6 +88,51 @@ data class VectorStroke(
             }
             val pad = 1.0f
             return RectF(minX - pad, minY - pad, maxX + pad, maxY + pad)
+        }
+
+        fun computeBezierSegments(points: List<RawPoint>, baseWidth: Float): List<BezierCurveSegment> {
+            if (points.size < 2) return emptyList()
+            val segments = ArrayList<BezierCurveSegment>(points.size - 1)
+            for (i in 1 until points.size) {
+                val p0 = points[i - 1]
+                val p1 = points[i]
+                val midX = (p0.x + p1.x) / 2f
+                val midY = (p0.y + p1.y) / 2f
+                val w0 = baseWidth * (0.5f + p0.pressure * 0.5f)
+                val w1 = baseWidth * (0.5f + p1.pressure * 0.5f)
+                val startX = if (i == 1) p0.x else (points[i - 2].x + p0.x) / 2f
+                val startY = if (i == 1) p0.y else (points[i - 2].y + p0.y) / 2f
+                segments.add(
+                    BezierCurveSegment(
+                        startX = startX,
+                        startY = startY,
+                        cp1X = p0.x,
+                        cp1Y = p0.y,
+                        endX = midX,
+                        endY = midY,
+                        startWidth = w0,
+                        endWidth = (w0 + w1) / 2f
+                    )
+                )
+            }
+            val lastP = points.last()
+            val prevP = points[points.size - 2]
+            val lastMidX = (prevP.x + lastP.x) / 2f
+            val lastMidY = (prevP.y + lastP.y) / 2f
+            val lastW = baseWidth * (0.5f + lastP.pressure * 0.5f)
+            segments.add(
+                BezierCurveSegment(
+                    startX = lastMidX,
+                    startY = lastMidY,
+                    cp1X = (lastMidX + lastP.x) / 2f,
+                    cp1Y = (lastMidY + lastP.y) / 2f,
+                    endX = lastP.x,
+                    endY = lastP.y,
+                    startWidth = (baseWidth * (0.5f + prevP.pressure * 0.5f) + lastW) / 2f,
+                    endWidth = lastW
+                )
+            )
+            return segments
         }
     }
 }

@@ -101,8 +101,9 @@ class SPenInputHandler(
         }
 
         // Strict Palm Rejection:
-        // If S Pen was used within last 350ms, ignore accidental palm or single-finger taps
-        if (now - lastStylusTimestamp < 350L) {
+        // If S Pen was used within last 350ms, ignore accidental single-finger palm touches,
+        // but immediately allow intentional multi-finger gestures (pinch-to-zoom / pan).
+        if (pointerCount == 1 && now - lastStylusTimestamp < 350L) {
             return true
         }
 
@@ -156,7 +157,7 @@ class SPenInputHandler(
                 if (!isPenDrawing || isStrokeSuppressed) return
 
                 val distFromStart = hypot(sx - penDownX, sy - penDownY)
-                if (distFromStart >= 15f) {
+                if (distFromStart >= 8f || event.historySize > 0) {
                     cancelPendingLongPress()
                 }
 
@@ -228,11 +229,9 @@ class SPenInputHandler(
                         timestampNs = System.nanoTime()
                     )
                     callbacks.onPenStrokeStart(pt, isButtonPressed = false)
-                    // Schedule 500ms press-and-hold timer for blank area context menu
-                    scheduleLongPressTimer(event.x, event.y)
                 } else {
                     isFingerDrawing = false
-                    // Also allow long press in pan mode
+                    // Allow press-and-hold context menu in pan mode
                     scheduleLongPressTimer(event.x, event.y)
                 }
             }
@@ -273,7 +272,7 @@ class SPenInputHandler(
                         return
                     }
                     val dist = hypot(event.x - fingerDownX, event.y - fingerDownY)
-                    if (dist > 15f) {
+                    if (dist > 8f || event.historySize > 0) {
                         hasMultiTouchMoved = true
                         cancelPendingLongPress()
                     }
@@ -397,10 +396,6 @@ class SPenInputHandler(
                         callbacks.onPenStrokeEnd(pt, isButtonPressed = false)
                     }
                     isFingerDrawing = false
-
-                    // Requirement 1: Drawing Tools override this state dynamically when touch is registered,
-                    // then return to Pan mode.
-                    callbacks.onReturnToPanMode()
                 }
 
                 if (!hasMultiTouchMoved && dist < 12f && duration < 250L && pointerCountAtDown == 1 && !isLongPressTriggered) {
@@ -427,7 +422,6 @@ class SPenInputHandler(
                         callbacks.onPenStrokeEnd(pt, isButtonPressed = false)
                     }
                     isFingerDrawing = false
-                    callbacks.onReturnToPanMode()
                 }
                 pointerCountAtDown = 0
                 hasMultiTouchMoved = false

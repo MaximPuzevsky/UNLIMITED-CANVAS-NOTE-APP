@@ -342,20 +342,44 @@ object GeometryMath {
     }
 
     /**
+     * Identifies unintentional micro-dots or invisible tap artifacts.
+     * Micro-dots have near-zero bounding box dimension (width < 2.5f and height < 2.5f with points <= 2,
+     * or dimensions < 1.0f).
+     */
+    fun isMicroDot(stroke: VectorStroke): Boolean {
+        val b = stroke.bounds
+        val w = b.width()
+        val h = b.height()
+        if (stroke.points.size <= 2 && w < 2.5f && h < 2.5f) return true
+        if (w < 1.0f && h < 1.0f) return true
+        return false
+    }
+
+    /**
      * Calculates collective bounding box for selected elements.
+     * When ignoreMicroDots is true, ignores invisible micro-dots to prevent
+     * skewing the center of mass or causing pasted elements to fly off-screen.
      */
     fun computeSelectionBounds(
         strokes: List<VectorStroke>,
         images: List<CanvasImageElement>,
-        textBlocks: List<com.example.model.CanvasTextBlock> = emptyList()
+        textBlocks: List<com.example.model.CanvasTextBlock> = emptyList(),
+        ignoreMicroDots: Boolean = true
     ): RectF? {
-        if (strokes.isEmpty() && images.isEmpty() && textBlocks.isEmpty()) return null
+        val filteredStrokes = if (ignoreMicroDots) {
+            val nonDots = strokes.filter { !isMicroDot(it) }
+            if (nonDots.isNotEmpty()) nonDots else strokes
+        } else {
+            strokes
+        }
+
+        if (filteredStrokes.isEmpty() && images.isEmpty() && textBlocks.isEmpty()) return null
         var minX = Float.MAX_VALUE
         var minY = Float.MAX_VALUE
         var maxX = -Float.MAX_VALUE
         var maxY = -Float.MAX_VALUE
 
-        for (s in strokes) {
+        for (s in filteredStrokes) {
             if (s.bounds.left < minX) minX = s.bounds.left
             if (s.bounds.top < minY) minY = s.bounds.top
             if (s.bounds.right > maxX) maxX = s.bounds.right
@@ -379,6 +403,26 @@ object GeometryMath {
         }
 
         if (minX > maxX || minY > maxY) return null
+        return RectF(minX, minY, maxX, maxY)
+    }
+
+    /**
+     * Computes the bounding box of a series of RawPoint points.
+     */
+    fun computePointsBounds(points: List<RawPoint>): RectF {
+        if (points.isEmpty()) return RectF(0f, 0f, 0f, 0f)
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE
+        var maxY = -Float.MAX_VALUE
+
+        for (p in points) {
+            if (p.x < minX) minX = p.x
+            if (p.y < minY) minY = p.y
+            if (p.x > maxX) maxX = p.x
+            if (p.y > maxY) maxY = p.y
+        }
+
         return RectF(minX, minY, maxX, maxY)
     }
 }

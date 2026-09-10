@@ -137,17 +137,40 @@ data class ViewportState(
 )
 
 /**
- * State of selected items (strokes and imported images).
+ * Text block element in infinite world coordinate space.
+ */
+data class CanvasTextBlock(
+    val id: String = UUID.randomUUID().toString(),
+    val layerId: String,
+    val text: String,
+    val worldX: Float,
+    val worldY: Float,
+    val fontSize: Float = 22f,
+    val color: Int = android.graphics.Color.WHITE,
+    val rotationDeg: Float = 0f,
+    val isDeleted: Boolean = false
+) {
+    val bounds: RectF
+        get() {
+            val estimatedWidth = (text.length * fontSize * 0.55f).coerceAtLeast(40f)
+            val estimatedHeight = (fontSize * 1.3f).coerceAtLeast(24f)
+            return RectF(worldX, worldY - estimatedHeight, worldX + estimatedWidth, worldY + 6f)
+        }
+}
+
+/**
+ * State of selected items (strokes, imported images, and text blocks).
  */
 data class SelectionState(
     val selectedStrokeIds: Set<String> = emptySet(),
     val selectedImageIds: Set<String> = emptySet(),
+    val selectedTextIds: Set<String> = emptySet(),
     val lassoPoints: List<RawPoint> = emptyList(),
     val isLassoActive: Boolean = false,
     val bounds: RectF? = null,
     val isCopyPending: Boolean = false // When true, only copied items are actively selected and movable
 ) {
-    val isEmpty: Boolean get() = selectedStrokeIds.isEmpty() && selectedImageIds.isEmpty()
+    val isEmpty: Boolean get() = selectedStrokeIds.isEmpty() && selectedImageIds.isEmpty() && selectedTextIds.isEmpty()
     val isNotEmpty: Boolean get() = !isEmpty
 }
 
@@ -161,16 +184,6 @@ data class ToolSlot(
     val strokeWidth: Float,
     val opacity: Float,
     val smoothing: Float
-)
-
-/**
- * COPIC-inspired color spectrum entry.
- */
-data class CopicColor(
-    val code: String,
-    val name: String,
-    val colorInt: Int,
-    val family: String
 )
 
 /**

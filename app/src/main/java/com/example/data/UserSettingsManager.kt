@@ -30,9 +30,27 @@ class UserSettingsManager(context: Context) {
         private const val KEY_BG_COLOR = "canvas_bg_color"
         private const val KEY_FINGER_MODE = "finger_mode"
         private const val KEY_TOOL_SLOTS = "tool_slots_json"
+        private const val KEY_ANGLE_SNAPPING = "angle_snapping"
+        private const val KEY_LAST_PROJECT_ID = "last_open_project_id"
 
         val DEFAULT_BG_COLOR = Color.parseColor("#15161C")
     }
+
+    fun saveAngleSnapping(snapping: Boolean) {
+        prefs.edit().putBoolean(KEY_ANGLE_SNAPPING, snapping).apply()
+    }
+
+    fun getAngleSnapping(): Boolean = prefs.getBoolean(KEY_ANGLE_SNAPPING, true)
+
+    fun saveLastOpenProjectId(id: String?) {
+        if (id == null) {
+            prefs.edit().remove(KEY_LAST_PROJECT_ID).apply()
+        } else {
+            prefs.edit().putString(KEY_LAST_PROJECT_ID, id).apply()
+        }
+    }
+
+    fun getLastOpenProjectId(): String? = prefs.getString(KEY_LAST_PROJECT_ID, null)
 
     fun saveActiveSlotIndex(index: Int) {
         prefs.edit().putInt(KEY_ACTIVE_SLOT, index).apply()

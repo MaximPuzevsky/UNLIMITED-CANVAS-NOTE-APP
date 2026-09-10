@@ -346,9 +346,10 @@ object GeometryMath {
      */
     fun computeSelectionBounds(
         strokes: List<VectorStroke>,
-        images: List<CanvasImageElement>
+        images: List<CanvasImageElement>,
+        textBlocks: List<com.example.model.CanvasTextBlock> = emptyList()
     ): RectF? {
-        if (strokes.isEmpty() && images.isEmpty()) return null
+        if (strokes.isEmpty() && images.isEmpty() && textBlocks.isEmpty()) return null
         var minX = Float.MAX_VALUE
         var minY = Float.MAX_VALUE
         var maxX = -Float.MAX_VALUE
@@ -363,6 +364,14 @@ object GeometryMath {
 
         for (img in images) {
             val b = img.bounds
+            if (b.left < minX) minX = b.left
+            if (b.top < minY) minY = b.top
+            if (b.right > maxX) maxX = b.right
+            if (b.bottom > maxY) maxY = b.bottom
+        }
+
+        for (tb in textBlocks) {
+            val b = tb.bounds
             if (b.left < minX) minX = b.left
             if (b.top < minY) minY = b.top
             if (b.right > maxX) maxX = b.right

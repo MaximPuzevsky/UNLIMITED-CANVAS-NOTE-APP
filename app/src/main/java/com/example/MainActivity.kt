@@ -3,6 +3,7 @@ package com.example
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Bundle
@@ -17,6 +18,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +44,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -57,6 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -66,14 +71,17 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.data.ConceptFileManager
 import com.example.data.DrawingRepository
+import com.example.data.UserSettingsManager
 import com.example.engine.VectorExporter
 import com.example.model.BrushType
 import com.example.ui.BlueprintDialog
 import com.example.ui.CanvasView
-import com.example.ui.ColorWheelDialog
+import com.example.ui.ConceptsWheelSystem
 import com.example.ui.FloatingSelectionBar
 import com.example.ui.GalleryScreen
+import com.example.ui.InstrumentStubBar
 import com.example.ui.LayersPanel
 import com.example.ui.QuickActionMenu
 import com.example.ui.ToolWheel
@@ -104,16 +112,52 @@ fun ConceptsSketchApp(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val repository = remember { DrawingRepository.getInstance(context) }
+    val userSettings = remember { UserSettingsManager(context) }
 
     // Projects repository state
     val projects: List<com.example.data.DrawingProjectEntity> by repository.allProjects.collectAsState(initial = emptyList())
     val currentProjectId by viewModel.currentProjectId.collectAsState()
     val currentProjectTitle by viewModel.currentProjectTitle.collectAsState()
 
-    // Initialize repository reference in ViewModel and seed sample project
+    // Initialize repository reference in ViewModel, seed sample project, and restore last project
     LaunchedEffect(Unit) {
+        viewModel.setUserSettings(userSettings)
         viewModel.setRepository(repository)
         repository.seedSampleProjectIfNeeded()
+
+        // Instant Local-First Auto-Saving (State Persistence):
+        // Persistent State on Reopen: When the app is closed, refreshed, or re-opened later,
+        // it automatically loads right back up with all custom tool configurations,
+        // precision levels, and grid preferences fully restored.
+        val lastProjId = userSettings.getLastOpenProjectId()
+        if (lastProjId != null) {
+            val entity = repository.getProjectById(lastProjId)
+            if (entity != null) {
+                val data = repository.loadProjectDrawingData(lastProjId)
+                viewModel.openProject(entity.id, entity.title, data)
+            }
+        }
+    }
+
+    // .concept File Picker Launcher (Open / Import)
+    val openConceptLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            coroutineScope.launch {
+                try {
+                    val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                    if (!text.isNullOrBlank()) {
+                        val payload = ConceptFileManager.deserializeConceptPayload(text)
+                        val entity = repository.importConceptProject(payload)
+                        viewModel.loadConceptFilePayload(payload, entity.id)
+                        Toast.makeText(context, "Opened .concept project: ${entity.title}", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Failed to load .concept file: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     // Requirement 6: STARTUP GALLERY & PROJECT MANAGER
@@ -140,6 +184,9 @@ fun ConceptsSketchApp(
                 coroutineScope.launch {
                     repository.deleteProject(id)
                 }
+            },
+            onImportConceptFile = {
+                openConceptLauncher.launch(arrayOf("*/*"))
             }
         )
         return
@@ -150,6 +197,7 @@ fun ConceptsSketchApp(
     val activeLayerId by viewModel.activeLayerId.collectAsState()
     val strokes by viewModel.strokes.collectAsState()
     val images by viewModel.images.collectAsState()
+    val textBlocks by viewModel.textBlocks.collectAsState()
     val viewport by viewModel.viewport.collectAsState()
     val gridType by viewModel.gridType.collectAsState()
     val toolSlots by viewModel.toolSlots.collectAsState()
@@ -167,8 +215,9 @@ fun ConceptsSketchApp(
 
     // Dialog & UI overlay visibility
     var isLayersOpen by remember { mutableStateOf(false) }
-    var isColorWheelOpen by remember { mutableStateOf(false) }
     var isBlueprintOpen by remember { mutableStateOf(false) }
+    var isColorTorusOpen by remember { mutableStateOf(false) }
+    var showAddTextNoteDialog by remember { mutableStateOf(false) }
     var exportedSvgContent by remember { mutableStateOf<String?>(null) }
     var exportedPngBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var exportedJsonContent by remember { mutableStateOf<String?>(null) }
@@ -209,6 +258,7 @@ fun ConceptsSketchApp(
                 layers = layers,
                 strokes = strokes,
                 images = images,
+                textBlocks = textBlocks,
                 viewport = viewport,
                 gridType = gridType,
                 canvasBackgroundColor = canvasBgColor,
@@ -219,20 +269,39 @@ fun ConceptsSketchApp(
                 activeWidth = activeSize,
                 activeBrush = activeBrush,
                 fingerMode = fingerMode,
-                onPenStart = { pt, isBtn, w, h -> viewModel.startInking(pt, isBtn, w, h) },
+                onPenStart = { pt, isBtn, w, h ->
+                    if (isColorTorusOpen) isColorTorusOpen = false
+                    viewModel.startInking(pt, isBtn, w, h)
+                },
                 onPenMove = { pts, isBtn, w, h -> viewModel.appendInkingPoints(pts, isBtn, w, h) },
                 onPenEnd = { pt, isBtn, w, h -> viewModel.finishInking(pt, isBtn, w, h) },
                 onPenDwell = { sx, sy -> viewModel.triggerQuickMenuAt(sx, sy) },
                 onPanZoom = { dx, dy, scale, rot -> viewModel.panZoomRotate(dx, dy, scale, rot) },
                 onUndo = { viewModel.undo() },
                 onRedo = { viewModel.redo() },
-                onSingleTapOutside = { _, _ -> viewModel.clearSelection() },
+                onSingleTapOutside = { _, _ ->
+                    if (isColorTorusOpen) isColorTorusOpen = false
+                    viewModel.clearSelection()
+                },
                 onDragSelection = { dx, dy -> viewModel.moveSelectionBy(dx, dy) },
                 onTransformSelection = { dx, dy, scale, rot -> viewModel.transformSelection(dx, dy, scale, rot) },
                 onCommitSelectionTransform = { dx, dy, scale, rot -> viewModel.commitSelectionTransform(dx, dy, scale, rot) },
                 onCommitSelectionMove = { dx, dy -> viewModel.commitSelectionMove(dx, dy) },
                 onReturnToPanMode = { viewModel.returnToPanMode() }
             )
+
+            // Blank Canvas Tap-to-Close Interceptor for Expanded Color Torus Ring
+            if (isColorTorusOpen) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTapGestures {
+                                isColorTorusOpen = false
+                            }
+                        }
+                )
+            }
 
             // 2. Top Precision & Status Bar
             TopPrecisionBar(
@@ -277,14 +346,38 @@ fun ConceptsSketchApp(
                     val json = VectorExporter.exportToJson(layers, strokes, images)
                     exportedJsonContent = json
                 },
+                onExportConcept = {
+                    try {
+                        val payload = viewModel.exportConceptFilePayload()
+                        val file = ConceptFileManager.exportToFile(context, payload)
+                        Toast.makeText(context, "Saved: ${file.name}", Toast.LENGTH_LONG).show()
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "Export error: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                },
+                onShareConcept = {
+                    try {
+                        val payload = viewModel.exportConceptFilePayload()
+                        val shareIntent = ConceptFileManager.createShareIntent(context, payload)
+                        context.startActivity(Intent.createChooser(shareIntent, "Share .concept Project"))
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "Share error: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                },
+                onImportConcept = {
+                    openConceptLauncher.launch(arrayOf("*/*"))
+                },
+                onAddTextNote = {
+                    showAddTextNoteDialog = true
+                },
                 onOpenBlueprintSpecs = { isBlueprintOpen = true },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()
             )
 
-            // 3. Floating Concepts Tool Wheel (Draggable 3-Ring Wheel)
-            ToolWheel(
+            // 3. Concepts-Inspired Multi-Layered Circular Wheel System
+            ConceptsWheelSystem(
                 toolSlots = toolSlots,
                 activeSlotIndex = activeSlotIndex,
                 activeColor = activeColor,
@@ -294,12 +387,18 @@ fun ConceptsSketchApp(
                 activeSmoothing = activeSmoothing,
                 onSelectSlot = { viewModel.selectToolSlot(it) },
                 onChangeBrushType = { viewModel.setActiveBrush(it) },
-                onOpenColorWheel = { isColorWheelOpen = true },
                 onSelectColor = { viewModel.setActiveColor(it) },
                 onSizeChange = { viewModel.setActiveStrokeWidth(it) },
                 onOpacityChange = { viewModel.setActiveOpacity(it) },
                 onSmoothingChange = { viewModel.setActiveSmoothing(it) },
-                modifier = Modifier.align(Alignment.TopStart)
+                onUndo = { viewModel.undo() },
+                onRedo = { viewModel.redo() },
+                isColorTorusOpen = isColorTorusOpen,
+                onToggleColorTorus = { isColorTorusOpen = !isColorTorusOpen },
+                onCloseColorTorus = { isColorTorusOpen = false },
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
             )
 
             // 4. Floating HUD Selection Toolbar (Copy, Delete, Mirror Left, Mirror Top)
@@ -346,19 +445,20 @@ fun ConceptsSketchApp(
                 modifier = Modifier.align(Alignment.CenterEnd)
             )
 
-            // 7. COPIC Color Wheel Dialog
-            if (isColorWheelOpen) {
-                ColorWheelDialog(
-                    currentColor = activeColor,
-                    copicColors = viewModel.copicSpectrum,
-                    onColorSelected = { viewModel.setActiveColor(it) },
-                    onDismiss = { isColorWheelOpen = false }
-                )
-            }
-
-            // 8. Technical Architecture Blueprint Dialog
+            // 7. Technical Architecture Blueprint Dialog
             if (isBlueprintOpen) {
                 BlueprintDialog(onDismiss = { isBlueprintOpen = false })
+            }
+
+            // 8. Add Text Note Dialog
+            if (showAddTextNoteDialog) {
+                TextNoteDialog(
+                    onDismiss = { showAddTextNoteDialog = false },
+                    onAddText = { text ->
+                        viewModel.addTextBlock(text)
+                        showAddTextNoteDialog = false
+                    }
+                )
             }
 
             // 9. SVG Export Preview Dialog
@@ -603,6 +703,86 @@ fun JsonExportDialog(
                     Icon(imageVector = Icons.Default.ContentCopy, contentDescription = "Copy JSON")
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Copy Vector JSON", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun TextNoteDialog(
+    onDismiss: () -> Unit,
+    onAddText: (String) -> Unit
+) {
+    var textInput by remember { mutableStateOf("") }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = Color(0xFF1B1D27),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF353A4C)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Add Canvas Text Note",
+                        color = Color.White,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = Color(0xFF94A3B8))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = textInput,
+                    onValueChange = { textInput = it },
+                    placeholder = { Text("Enter annotation, design notes, or specs...", color = Color(0xFF94A3B8)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedBorderColor = Color(0xFF48CAE4),
+                        unfocusedBorderColor = Color(0xFF353A4C)
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    horizontalArrangement = Arrangement.End,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Cancel", color = Color(0xFFCBD5E1))
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            if (textInput.isNotBlank()) {
+                                onAddText(textInput)
+                                onDismiss()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Place on Canvas", fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }

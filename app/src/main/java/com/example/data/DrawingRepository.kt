@@ -138,12 +138,19 @@ class DrawingRepository(private val context: Context) {
         )
     }
 
+    private var autoSaveJob: kotlinx.coroutines.Job? = null
+
     fun autoSaveProjectAsync(
         projectId: String,
         title: String,
-        data: ProjectDrawingData
+        data: ProjectDrawingData,
+        immediate: Boolean = false
     ) {
-        repositoryScope.launch {
+        autoSaveJob?.cancel()
+        autoSaveJob = repositoryScope.launch {
+            if (!immediate) {
+                kotlinx.coroutines.delay(300L)
+            }
             try {
                 // 1. Save data file
                 DrawingStorage.saveDrawingFile(context, projectId, data)
@@ -173,6 +180,34 @@ class DrawingRepository(private val context: Context) {
                 e.printStackTrace()
             }
         }
+    }
+
+    suspend fun importConceptProject(payload: ConceptFilePayload): DrawingProjectEntity = withContext(Dispatchers.IO) {
+        val count = dao.getProjectCount()
+        val now = System.currentTimeMillis()
+        val title = if (payload.projectTitle.isNotBlank()) payload.projectTitle else "Imported Concept ${count + 1}"
+        val id = UUID.randomUUID().toString()
+
+        DrawingStorage.saveDrawingFile(context, id, payload.drawingData)
+        val thumb = DrawingStorage.generateThumbnailBase64(payload.drawingData.strokes, payload.drawingData.images)
+
+        val entity = DrawingProjectEntity(
+            id = id,
+            title = title,
+            createdAt = now,
+            updatedAt = now,
+            thumbnailBase64 = thumb,
+            strokeCount = payload.drawingData.strokes.count { !it.isDeleted },
+            layerCount = payload.drawingData.layers.size,
+            imageCount = payload.drawingData.images.size,
+            viewportPanX = payload.drawingData.viewport.panX,
+            viewportPanY = payload.drawingData.viewport.panY,
+            viewportZoom = payload.drawingData.viewport.zoom,
+            viewportRotationDeg = payload.drawingData.viewport.rotationDeg,
+            gridType = payload.drawingData.gridType.name
+        )
+        dao.insertOrUpdate(entity)
+        entity
     }
 
     suspend fun deleteProject(projectId: String) = withContext(Dispatchers.IO) {

@@ -5,6 +5,8 @@ import android.graphics.Color
 import android.graphics.PointF
 import android.graphics.RectF
 import androidx.lifecycle.ViewModel
+import com.example.data.ConceptFileManager
+import com.example.data.ConceptFilePayload
 import com.example.data.DrawingRepository
 import com.example.data.ProjectDrawingData
 import com.example.data.UserSettingsManager
@@ -12,7 +14,7 @@ import com.example.engine.GeometryMath
 import com.example.model.BrushType
 import com.example.model.CanvasImageElement
 import com.example.model.CanvasLayer
-import com.example.model.CopicColor
+import com.example.model.CanvasTextBlock
 import com.example.model.FingerMode
 import com.example.model.GridType
 import com.example.model.RawPoint
@@ -30,6 +32,7 @@ import kotlin.math.sin
 data class CanvasSnapshot(
     val strokes: List<VectorStroke>,
     val images: List<CanvasImageElement>,
+    val textBlocks: List<CanvasTextBlock> = emptyList(),
     val layers: List<CanvasLayer>
 )
 
@@ -58,6 +61,8 @@ class CanvasViewModel : ViewModel() {
         _gridType.value = settings.getGridType()
         _canvasBackgroundColor.value = settings.getBackgroundColor()
         _fingerMode.value = settings.getFingerMode()
+        val angleSnapping = settings.getAngleSnapping()
+        _viewport.value = _viewport.value.copy(angleSnapping = angleSnapping)
     }
 
     private val _currentProjectId = MutableStateFlow<String?>(null)
@@ -85,6 +90,10 @@ class CanvasViewModel : ViewModel() {
 
     private val _images = MutableStateFlow<List<CanvasImageElement>>(emptyList())
     val images: StateFlow<List<CanvasImageElement>> = _images.asStateFlow()
+
+    // Text elements
+    private val _textBlocks = MutableStateFlow<List<CanvasTextBlock>>(emptyList())
+    val textBlocks: StateFlow<List<CanvasTextBlock>> = _textBlocks.asStateFlow()
 
     // Viewport
     private val _viewport = MutableStateFlow(ViewportState(zoom = 1.0f))
@@ -160,68 +169,8 @@ class CanvasViewModel : ViewModel() {
     private val undoStack = mutableListOf<CanvasSnapshot>()
     private val redoStack = mutableListOf<CanvasSnapshot>()
 
-    // Color swatches (COPIC spectrum organized by color families: E, B, R, YG, BV, Grays)
-    val copicSpectrum = listOf(
-        // Monochrome & Grays
-        CopicColor("100", "Special Black", Color.parseColor("#111111"), "Black & Grays"),
-        CopicColor("C-1", "Cool Gray 1", Color.parseColor("#E7EAEB"), "Cool Grays (C)"),
-        CopicColor("C-3", "Cool Gray 3", Color.parseColor("#CBD0D4"), "Cool Grays (C)"),
-        CopicColor("C-5", "Cool Gray 5", Color.parseColor("#9EA5AA"), "Cool Grays (C)"),
-        CopicColor("C-7", "Cool Gray 7", Color.parseColor("#686E74"), "Cool Grays (C)"),
-        CopicColor("W-1", "Warm Gray 1", Color.parseColor("#EAE7E1"), "Warm Grays (W)"),
-        CopicColor("W-3", "Warm Gray 3", Color.parseColor("#D4CEC5"), "Warm Grays (W)"),
-        CopicColor("W-5", "Warm Gray 5", Color.parseColor("#B3ABA0"), "Warm Grays (W)"),
-        CopicColor("W-7", "Warm Gray 7", Color.parseColor("#7D756C"), "Warm Greys (W)"),
-        CopicColor("N-1", "Neutral Gray 1", Color.parseColor("#E4E4E4"), "Neutral Grays (N)"),
-        CopicColor("N-3", "Neutral Gray 3", Color.parseColor("#C8C8C8"), "Neutral Grays (N)"),
-        CopicColor("N-5", "Neutral Gray 5", Color.parseColor("#9A9A9A"), "Neutral Grays (N)"),
-        CopicColor("N-7", "Neutral Gray 7", Color.parseColor("#646464"), "Neutral Grays (N)"),
-
-        // Earth (E)
-        CopicColor("E00", "Cotton Pearl", Color.parseColor("#FBE8DF"), "Earth (E)"),
-        CopicColor("E21", "Baby Skin Pink", Color.parseColor("#F6D2B8"), "Earth (E)"),
-        CopicColor("E33", "Sand", Color.parseColor("#DFB186"), "Earth (E)"),
-        CopicColor("E37", "Sepia", Color.parseColor("#9C6839"), "Earth (E)"),
-        CopicColor("E29", "Burnt Umber", Color.parseColor("#6C4334"), "Earth (E)"),
-        CopicColor("E49", "Dark Bark", Color.parseColor("#3B261D"), "Earth (E)"),
-
-        // Reds (R)
-        CopicColor("R00", "Pinkish White", Color.parseColor("#FFEAEA"), "Reds (R)"),
-        CopicColor("R20", "Seashell Pink", Color.parseColor("#F8B7B2"), "Reds (R)"),
-        CopicColor("R29", "Lipstick Red", Color.parseColor("#E62B34"), "Reds (R)"),
-        CopicColor("R39", "Garnet", Color.parseColor("#BD2653"), "Reds (R)"),
-        CopicColor("R59", "Cardinal", Color.parseColor("#7B243B"), "Reds (R)"),
-
-        // Yellow-Red / Orange & Yellow (YR, Y)
-        CopicColor("YR04", "Chrome Orange", Color.parseColor("#FA8223"), "Yellow-Red (YR)"),
-        CopicColor("YR07", "Cadmium Orange", Color.parseColor("#E8561C"), "Yellow-Red (YR)"),
-        CopicColor("Y11", "Pale Yellow", Color.parseColor("#FFF5A5"), "Yellows (Y)"),
-        CopicColor("Y15", "Cadmium Yellow", Color.parseColor("#FBD429"), "Yellows (Y)"),
-        CopicColor("Y17", "Golden Yellow", Color.parseColor("#F8B600"), "Yellows (Y)"),
-
-        // Yellow-Green & Green (YG, G)
-        CopicColor("YG03", "Yellow Green", Color.parseColor("#C8DE6D"), "Yellow-Green (YG)"),
-        CopicColor("YG17", "Grass Green", Color.parseColor("#74B238"), "Yellow-Green (YG)"),
-        CopicColor("YG67", "Moss", Color.parseColor("#4B7B34"), "Yellow-Green (YG)"),
-        CopicColor("G05", "Emerald Green", Color.parseColor("#38A856"), "Greens (G)"),
-        CopicColor("G17", "Forest Green", Color.parseColor("#008C4A"), "Greens (G)"),
-
-        // Blues (B)
-        CopicColor("B00", "Frost Blue", Color.parseColor("#D7EDF9"), "Blues (B)"),
-        CopicColor("B05", "Robin's Egg Blue", Color.parseColor("#3FB1E5"), "Blues (B)"),
-        CopicColor("B24", "Sky Blue", Color.parseColor("#53A4DA"), "Blues (B)"),
-        CopicColor("B29", "Night Blue", Color.parseColor("#005DA4"), "Blues (B)"),
-        CopicColor("B39", "Prussian Blue", Color.parseColor("#1B3C73"), "Blues (B)"),
-
-        // Blue-Violet & Violet (BV, V)
-        CopicColor("BV00", "Mauve Shadow", Color.parseColor("#DFD8EB"), "Blue-Violet (BV)"),
-        CopicColor("BV04", "Blue Berry", Color.parseColor("#7C83BF"), "Blue-Violet (BV)"),
-        CopicColor("BV17", "Deep Reddish Blue", Color.parseColor("#525B88"), "Blue-Violet (BV)"),
-        CopicColor("V09", "Violet", Color.parseColor("#6A2A80"), "Violets (V)")
-    )
-
     private fun pushUndoSnapshot() {
-        undoStack.add(CanvasSnapshot(_strokes.value, _images.value, _layers.value))
+        undoStack.add(CanvasSnapshot(_strokes.value, _images.value, _textBlocks.value, _layers.value))
         if (undoStack.size > 50) undoStack.removeAt(0)
         redoStack.clear()
     }
@@ -229,22 +178,26 @@ class CanvasViewModel : ViewModel() {
     fun undo() {
         if (undoStack.isNotEmpty()) {
             val snapshot = undoStack.removeAt(undoStack.size - 1)
-            redoStack.add(CanvasSnapshot(_strokes.value, _images.value, _layers.value))
+            redoStack.add(CanvasSnapshot(_strokes.value, _images.value, _textBlocks.value, _layers.value))
             _strokes.value = snapshot.strokes
             _images.value = snapshot.images
+            _textBlocks.value = snapshot.textBlocks
             _layers.value = snapshot.layers
             clearSelection()
+            scheduleAutoSave()
         }
     }
 
     fun redo() {
         if (redoStack.isNotEmpty()) {
             val snapshot = redoStack.removeAt(redoStack.size - 1)
-            undoStack.add(CanvasSnapshot(_strokes.value, _images.value, _layers.value))
+            undoStack.add(CanvasSnapshot(_strokes.value, _images.value, _textBlocks.value, _layers.value))
             _strokes.value = snapshot.strokes
             _images.value = snapshot.images
+            _textBlocks.value = snapshot.textBlocks
             _layers.value = snapshot.layers
             clearSelection()
+            scheduleAutoSave()
         }
     }
 
@@ -308,24 +261,38 @@ class CanvasViewModel : ViewModel() {
     }
 
     fun resetViewport() {
-        _viewport.value = ViewportState(panX = 0f, panY = 0f, zoom = 1.0f, rotationDeg = 0f)
+        _viewport.value = ViewportState(panX = 0f, panY = 0f, zoom = 1.0f, rotationDeg = 0f, angleSnapping = _viewport.value.angleSnapping)
+        scheduleAutoSave()
     }
 
     fun resetRotation() {
         _viewport.value = _viewport.value.copy(rotationDeg = 0f)
+        scheduleAutoSave()
     }
 
     fun toggleAngleSnapping() {
-        _viewport.value = _viewport.value.copy(angleSnapping = !_viewport.value.angleSnapping)
+        val newSnapping = !_viewport.value.angleSnapping
+        _viewport.value = _viewport.value.copy(angleSnapping = newSnapping)
+        userSettings?.saveAngleSnapping(newSnapping)
+        scheduleAutoSave()
+    }
+
+    fun setAngleSnapping(snapping: Boolean) {
+        _viewport.value = _viewport.value.copy(angleSnapping = snapping)
+        userSettings?.saveAngleSnapping(snapping)
+        scheduleAutoSave()
     }
 
     fun setCanvasBackgroundColor(color: Int) {
         _canvasBackgroundColor.value = color
+        userSettings?.saveBackgroundColor(color)
+        scheduleAutoSave()
     }
 
     fun setGridType(grid: GridType) {
         _gridType.value = grid
         userSettings?.saveGridType(grid)
+        scheduleAutoSave()
     }
 
     // S Pen and Inking Flow
@@ -570,35 +537,116 @@ class CanvasViewModel : ViewModel() {
         _activeLayerId.value = data.layers.firstOrNull()?.id ?: UUID.randomUUID().toString()
         _strokes.value = data.strokes
         _images.value = data.images
+        _textBlocks.value = data.textBlocks
         _viewport.value = data.viewport
         _gridType.value = data.gridType
+        _canvasBackgroundColor.value = data.backgroundColor
         _fingerMode.value = FingerMode.PAN
+        userSettings?.saveLastOpenProjectId(projectId)
         clearSelection()
         undoStack.clear()
         redoStack.clear()
     }
 
     fun closeCurrentProject() {
-        saveCurrentProjectNow()
+        saveCurrentProjectNow(immediate = true)
+        userSettings?.saveLastOpenProjectId(null)
         _currentProjectId.value = null
         clearSelection()
     }
 
-    fun saveCurrentProjectNow() {
+    fun saveCurrentProjectNow(immediate: Boolean = false) {
         val projId = _currentProjectId.value ?: return
         val repo = repository ?: return
         val data = ProjectDrawingData(
             layers = _layers.value,
             strokes = _strokes.value,
             images = _images.value,
+            textBlocks = _textBlocks.value,
             viewport = _viewport.value,
-            gridType = _gridType.value
+            gridType = _gridType.value,
+            backgroundColor = _canvasBackgroundColor.value
         )
-        repo.autoSaveProjectAsync(projId, _currentProjectTitle.value, data)
+        repo.autoSaveProjectAsync(projId, _currentProjectTitle.value, data, immediate = immediate)
     }
 
     fun scheduleAutoSave() {
-        saveCurrentProjectNow()
+        saveCurrentProjectNow(immediate = false)
+    }
+
+    // Text Block Management
+    fun addTextBlock(text: String, worldX: Float? = null, worldY: Float? = null, color: Int? = null) {
+        if (text.isBlank()) return
+        pushUndoSnapshot()
+        val vp = _viewport.value
+        val posX = worldX ?: (-vp.panX)
+        val posY = worldY ?: (-vp.panY)
+        val tb = CanvasTextBlock(
+            id = UUID.randomUUID().toString(),
+            layerId = _activeLayerId.value,
+            text = text,
+            worldX = posX,
+            worldY = posY,
+            fontSize = 24f / vp.zoom.coerceIn(0.5f, 2.0f),
+            color = color ?: _activeColor.value
+        )
+        _textBlocks.value = _textBlocks.value + tb
+        scheduleAutoSave()
+    }
+
+    fun deleteTextBlock(id: String) {
+        pushUndoSnapshot()
+        _textBlocks.value = _textBlocks.value.filter { it.id != id }
+        scheduleAutoSave()
+    }
+
+    // .concept File Format Integration
+    fun exportConceptFilePayload(): ConceptFilePayload {
+        val currentData = ProjectDrawingData(
+            layers = _layers.value,
+            strokes = _strokes.value,
+            images = _images.value,
+            textBlocks = _textBlocks.value,
+            viewport = _viewport.value,
+            gridType = _gridType.value,
+            backgroundColor = _canvasBackgroundColor.value
+        )
+        return ConceptFilePayload(
+            projectTitle = _currentProjectTitle.value,
+            drawingData = currentData,
+            toolSlots = _toolSlots.value,
+            activeSlotIndex = _activeSlotIndex.value
+        )
+    }
+
+    fun loadConceptFilePayload(payload: ConceptFilePayload, projectId: String? = null) {
+        val id = projectId ?: _currentProjectId.value ?: UUID.randomUUID().toString()
+        _currentProjectId.value = id
+        _currentProjectTitle.value = payload.projectTitle
+        _layers.value = payload.drawingData.layers
+        _activeLayerId.value = payload.drawingData.layers.firstOrNull()?.id ?: UUID.randomUUID().toString()
+        _strokes.value = payload.drawingData.strokes
+        _images.value = payload.drawingData.images
+        _textBlocks.value = payload.drawingData.textBlocks
+        _viewport.value = payload.drawingData.viewport
+        _gridType.value = payload.drawingData.gridType
+        _canvasBackgroundColor.value = payload.drawingData.backgroundColor
+        if (payload.toolSlots.isNotEmpty()) {
+            _toolSlots.value = payload.toolSlots
+            userSettings?.saveToolSlots(payload.toolSlots)
+        }
+        val slotIdx = payload.activeSlotIndex.coerceIn(0, (_toolSlots.value.size - 1).coerceAtLeast(0))
+        selectToolSlot(slotIdx)
+
+        userSettings?.saveGridType(payload.drawingData.gridType)
+        userSettings?.saveBackgroundColor(payload.drawingData.backgroundColor)
+        userSettings?.saveAngleSnapping(payload.drawingData.viewport.angleSnapping)
+        userSettings?.saveLastOpenProjectId(id)
+
+        clearSelection()
+        undoStack.clear()
+        redoStack.clear()
+        scheduleAutoSave()
     }
 
     // Selection actions (Minimal floating toolbar parity)
@@ -664,6 +712,7 @@ class CanvasViewModel : ViewModel() {
         pushUndoSnapshot()
         _strokes.value = _strokes.value.filter { it.id !in sel.selectedStrokeIds }
         _images.value = _images.value.filter { it.id !in sel.selectedImageIds }
+        _textBlocks.value = _textBlocks.value.filter { it.id !in sel.selectedTextIds }
         clearSelection()
         scheduleAutoSave()
     }
@@ -741,9 +790,16 @@ class CanvasViewModel : ViewModel() {
             } else img
         }
 
+        _textBlocks.value = _textBlocks.value.map { tb ->
+            if (tb.id in sel.selectedTextIds) {
+                tb.copy(worldX = tb.worldX + dx, worldY = tb.worldY + dy)
+            } else tb
+        }
+
         val strokesSubset = _strokes.value.filter { it.id in sel.selectedStrokeIds }
         val imagesSubset = _images.value.filter { it.id in sel.selectedImageIds }
-        _selection.value = sel.copy(bounds = GeometryMath.computeSelectionBounds(strokesSubset, imagesSubset))
+        val textSubset = _textBlocks.value.filter { it.id in sel.selectedTextIds }
+        _selection.value = sel.copy(bounds = GeometryMath.computeSelectionBounds(strokesSubset, imagesSubset, textSubset))
         scheduleAutoSave()
     }
 

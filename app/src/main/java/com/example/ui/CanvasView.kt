@@ -9,6 +9,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PointF
 import android.graphics.RectF
+import android.graphics.Typeface
 import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.View
@@ -23,6 +24,7 @@ import com.example.engine.QuadTree
 import com.example.model.BrushType
 import com.example.model.CanvasImageElement
 import com.example.model.CanvasLayer
+import com.example.model.CanvasTextBlock
 import com.example.model.FingerMode
 import com.example.model.GridType
 import com.example.model.RawPoint
@@ -50,6 +52,7 @@ class NativeCanvasSurface(
     var layers: List<CanvasLayer> = emptyList()
     var strokes: List<VectorStroke> = emptyList()
     var images: List<CanvasImageElement> = emptyList()
+    var textBlocks: List<CanvasTextBlock> = emptyList()
     var viewport: ViewportState = ViewportState()
     var gridType: GridType = GridType.DOT
     var canvasBackgroundColor: Int = Color.parseColor("#15161C")
@@ -391,6 +394,12 @@ class NativeCanvasSurface(
 
     private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
+    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        textSize = 24f
+        typeface = Typeface.DEFAULT_BOLD
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
             if (isSelectionTransforming) {
@@ -452,12 +461,14 @@ class NativeCanvasSurface(
         val sel = selection
 
         // 5. Render layers
+        val renderedImageIds = mutableSetOf<String>()
         for (layer in sortedLayers) {
             if (!layer.isVisible) continue
 
             // A. Render images in this layer
             val layerImages = allImages.filter { it.layerId == layer.id }
             for (img in layerImages) {
+                renderedImageIds.add(img.id)
                 // If this image is part of transforming selection, skip drawing it in base layer
                 if (isSelectionTransforming && img.id in sel.selectedImageIds) continue
 
@@ -479,6 +490,33 @@ class NativeCanvasSurface(
                 if (visibleStrokes.isNotEmpty() && !visibleStrokes.contains(stroke)) continue
                 renderStroke(canvas, stroke, layer.opacity)
             }
+
+            // C. Render text notes in this layer
+            val layerTextBlocks = textBlocks.filter { it.layerId == layer.id && !it.isDeleted }
+            for (tb in layerTextBlocks) {
+                if (isSelectionTransforming && tb.id in sel.selectedTextIds) continue
+                canvas.save()
+                canvas.translate(tb.worldX, tb.worldY)
+                canvas.rotate(tb.rotationDeg)
+                textPaint.color = tb.color
+                textPaint.textSize = tb.fontSize
+                textPaint.alpha = (layer.opacity * 255f).toInt()
+                canvas.drawText(tb.text, 0f, 0f, textPaint)
+                canvas.restore()
+            }
+        }
+
+        // Safeguard: Render any orphan images not tied to an active layer so canvas elements are never hidden
+        val orphanImages = allImages.filter { it.id !in renderedImageIds }
+        for (img in orphanImages) {
+            if (isSelectionTransforming && img.id in sel.selectedImageIds) continue
+            canvas.save()
+            canvas.translate(img.worldX, img.worldY)
+            canvas.rotate(img.rotationDeg)
+            canvas.scale(img.scaleX, img.scaleY)
+            imagePaint.alpha = (img.opacity * 255f).toInt()
+            canvas.drawBitmap(img.bitmap, -img.width / 2f, -img.height / 2f, imagePaint)
+            canvas.restore()
         }
 
         // 6. If selection is currently transforming, render the cached texture with static transform matrix!
@@ -689,6 +727,7 @@ fun CanvasView(
     layers: List<CanvasLayer>,
     strokes: List<VectorStroke>,
     images: List<CanvasImageElement>,
+    textBlocks: List<CanvasTextBlock> = emptyList(),
     viewport: ViewportState,
     gridType: GridType,
     canvasBackgroundColor: Int = Color.parseColor("#15161C"),
@@ -721,6 +760,7 @@ fun CanvasView(
                     this.layers = layers
                     this.strokes = strokes
                     this.images = images
+                    this.textBlocks = textBlocks
                     this.viewport = viewport
                     this.gridType = gridType
                     this.canvasBackgroundColor = canvasBackgroundColor
@@ -751,6 +791,7 @@ fun CanvasView(
                 view.layers = layers
                 view.strokes = strokes
                 view.images = images
+                view.textBlocks = textBlocks
                 view.viewport = viewport
                 view.gridType = gridType
                 view.canvasBackgroundColor = canvasBackgroundColor

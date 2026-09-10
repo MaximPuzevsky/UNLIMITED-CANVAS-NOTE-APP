@@ -95,6 +95,10 @@ fun TopPrecisionBar(
     onExportSvg: () -> Unit,
     onExportPng: () -> Unit,
     onExportJson: () -> Unit,
+    onExportConcept: () -> Unit = {},
+    onShareConcept: () -> Unit = {},
+    onImportConcept: () -> Unit = {},
+    onAddTextNote: () -> Unit = {},
     onOpenBlueprintSpecs: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -318,7 +322,21 @@ fun TopPrecisionBar(
                         onDismissRequest = { showImportMenu = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Pick from Device Storage") },
+                            text = { Text("Open / Import .concept File") },
+                            onClick = {
+                                showImportMenu = false
+                                onImportConcept()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Add Text Note / Label") },
+                            onClick = {
+                                showImportMenu = false
+                                onAddTextNote()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Pick Image from Device Storage") },
                             onClick = {
                                 showImportMenu = false
                                 onImportDeviceMedia()
@@ -383,6 +401,20 @@ fun TopPrecisionBar(
                         expanded = showExportMenu,
                         onDismissRequest = { showExportMenu = false }
                     ) {
+                        DropdownMenuItem(
+                            text = { Text("Save as .concept Project") },
+                            onClick = {
+                                showExportMenu = false
+                                onExportConcept()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Share .concept via Share Sheet") },
+                            onClick = {
+                                showExportMenu = false
+                                onShareConcept()
+                            }
+                        )
                         DropdownMenuItem(
                             text = { Text("Export Vector SVG (W3C Standard)") },
                             onClick = {

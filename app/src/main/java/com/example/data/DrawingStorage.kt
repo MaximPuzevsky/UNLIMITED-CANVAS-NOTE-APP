@@ -12,6 +12,7 @@ import android.util.Base64
 import com.example.model.BrushType
 import com.example.model.CanvasImageElement
 import com.example.model.CanvasLayer
+import com.example.model.CanvasTextBlock
 import com.example.model.GridType
 import com.example.model.RawPoint
 import com.example.model.VectorStroke
@@ -27,8 +28,10 @@ data class ProjectDrawingData(
     val layers: List<CanvasLayer>,
     val strokes: List<VectorStroke>,
     val images: List<CanvasImageElement>,
+    val textBlocks: List<CanvasTextBlock> = emptyList(),
     val viewport: ViewportState,
-    val gridType: GridType
+    val gridType: GridType,
+    val backgroundColor: Int = Color.parseColor("#15161C")
 )
 
 object DrawingStorage {
@@ -128,27 +131,51 @@ object DrawingStorage {
             strokesArray.put(sObj)
         }
 
-        // 4. Viewport and Grid
+        // 4. Save text blocks
+        val textBlocksArray = JSONArray()
+        for (tb in data.textBlocks) {
+            val tbObj = JSONObject().apply {
+                put("id", tb.id)
+                put("layerId", tb.layerId)
+                put("text", tb.text)
+                put("worldX", tb.worldX.toDouble())
+                put("worldY", tb.worldY.toDouble())
+                put("fontSize", tb.fontSize.toDouble())
+                put("color", tb.color)
+                put("rotationDeg", tb.rotationDeg.toDouble())
+                put("isDeleted", tb.isDeleted)
+            }
+            textBlocksArray.put(tbObj)
+        }
+
+        // 5. Viewport, Grid, and Canvas Metadata
         val root = JSONObject().apply {
             put("version", 1)
+            put("format", "concepts-canvas")
             put("projectId", projectId)
             put("gridType", data.gridType.name)
+            put("backgroundColor", data.backgroundColor)
             put("panX", data.viewport.panX.toDouble())
             put("panY", data.viewport.panY.toDouble())
             put("zoom", data.viewport.zoom.toDouble())
             put("rotationDeg", data.viewport.rotationDeg.toDouble())
+            put("angleSnapping", data.viewport.angleSnapping)
             put("layers", layersArray)
             put("strokes", strokesArray)
             put("images", imageJsonArray)
+            put("textBlocks", textBlocksArray)
         }
 
-        val targetFile = File(projectDir, "drawing.appdraw")
-        targetFile.writeText(root.toString())
+        val jsonStr = root.toString()
+        File(projectDir, "drawing.concept").writeText(jsonStr)
+        File(projectDir, "drawing.appdraw").writeText(jsonStr)
     }
 
     fun loadDrawingFile(context: Context, projectId: String): ProjectDrawingData? {
-        val targetFile = File(getProjectDir(context, projectId), "drawing.appdraw")
-        if (!targetFile.exists()) return null
+        val projectDir = getProjectDir(context, projectId)
+        val conceptFile = File(projectDir, "drawing.concept")
+        val appdrawFile = File(projectDir, "drawing.appdraw")
+        val targetFile = if (conceptFile.exists()) conceptFile else if (appdrawFile.exists()) appdrawFile else return null
 
         return try {
             val text = targetFile.readText()
@@ -160,11 +187,14 @@ object DrawingStorage {
                 GridType.DOT
             }
 
+            val bgColor = root.optInt("backgroundColor", Color.parseColor("#15161C"))
+
             val viewport = ViewportState(
                 panX = root.optDouble("panX", 0.0).toFloat(),
                 panY = root.optDouble("panY", 0.0).toFloat(),
                 zoom = root.optDouble("zoom", 1.0).toFloat(),
-                rotationDeg = root.optDouble("rotationDeg", 0.0).toFloat()
+                rotationDeg = root.optDouble("rotationDeg", 0.0).toFloat(),
+                angleSnapping = root.optBoolean("angleSnapping", true)
             )
 
             // Layers
@@ -269,14 +299,38 @@ object DrawingStorage {
                 }
             }
 
+            // Text Blocks
+            val textBlocks = mutableListOf<CanvasTextBlock>()
+            val tbArray = root.optJSONArray("textBlocks")
+            if (tbArray != null) {
+                for (i in 0 until tbArray.length()) {
+                    val tbObj = tbArray.getJSONObject(i)
+                    textBlocks.add(
+                        CanvasTextBlock(
+                            id = tbObj.getString("id"),
+                            layerId = tbObj.getString("layerId"),
+                            text = tbObj.getString("text"),
+                            worldX = tbObj.optDouble("worldX", 0.0).toFloat(),
+                            worldY = tbObj.optDouble("worldY", 0.0).toFloat(),
+                            fontSize = tbObj.optDouble("fontSize", 22.0).toFloat(),
+                            color = tbObj.optInt("color", Color.WHITE),
+                            rotationDeg = tbObj.optDouble("rotationDeg", 0.0).toFloat(),
+                            isDeleted = tbObj.optBoolean("isDeleted", false)
+                        )
+                    )
+                }
+            }
+
             ProjectDrawingData(
                 layers = if (layers.isNotEmpty()) layers else listOf(
                     CanvasLayer(id = UUID.randomUUID().toString(), name = "Sketches", orderIndex = 0)
                 ),
                 strokes = strokes,
                 images = images,
+                textBlocks = textBlocks,
                 viewport = viewport,
-                gridType = gridType
+                gridType = gridType,
+                backgroundColor = bgColor
             )
         } catch (e: Exception) {
             e.printStackTrace()

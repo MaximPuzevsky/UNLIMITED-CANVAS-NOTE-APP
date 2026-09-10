@@ -67,6 +67,7 @@ fun GalleryScreen(
     onOpenProject: (projectId: String, title: String) -> Unit,
     onCreateNewProject: (title: String?) -> Unit,
     onDeleteProject: (projectId: String) -> Unit,
+    onImportConceptFile: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showNewProjectDialog by remember { mutableStateOf(false) }
@@ -121,28 +122,54 @@ fun GalleryScreen(
                     }
                 }
 
-                // New Drawing Action Button
-                Button(
-                    onClick = { showNewProjectDialog = true },
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF0284C7),
-                        contentColor = Color.White
-                    ),
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
-                    modifier = Modifier.testTag("new_drawing_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = "New Drawing",
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "New Drawing",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Import .concept Button
+                    OutlinedButton(
+                        onClick = onImportConceptFile,
+                        shape = RoundedCornerShape(16.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+                        modifier = Modifier
+                            .padding(end = 8.dp)
+                            .testTag("import_concept_gallery_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FolderOpen,
+                            contentDescription = "Import .concept File",
+                            tint = Color(0xFF0284C7),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Import .concept",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF0284C7)
+                        )
+                    }
+
+                    // New Drawing Action Button
+                    Button(
+                        onClick = { showNewProjectDialog = true },
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF0284C7),
+                            contentColor = Color.White
+                        ),
+                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+                        modifier = Modifier.testTag("new_drawing_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "New Drawing",
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "New Drawing",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
             }
 
